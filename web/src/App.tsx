@@ -1,18 +1,24 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
+  ConnectedAccount,
   Conversation,
   Message,
+  OutlookMessage,
   TaskItem,
   DEMO_USER_ID,
   addMessage,
+  beginMicrosoftAuthorize,
   claimConversation,
   completeTask,
   createConversation,
   createTask,
+  disconnectAccount,
   getHealth,
   getMe,
+  listConnectedAccounts,
   listConversations,
   listMessages,
+  listOutlookMail,
   listTasks,
   releaseConversation,
 } from './api'
@@ -49,6 +55,9 @@ export default function App() {
   const [taskTitle, setTaskTitle] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
+  const [outlookMail, setOutlookMail] = useState<OutlookMessage[]>([])
+  const [statusBanner, setStatusBanner] = useState<string | null>(null)
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
 
@@ -62,13 +71,24 @@ export default function App() {
     setTasks(await listTasks())
   }
 
+  const refreshAccounts = async () => {
+    const items = await listConnectedAccounts()
+    setAccounts(items)
+    const connected = items.find((a) => a.connectionStatus === 'Connected')
+    if (connected) {
+      setOutlookMail(await listOutlookMail(connected.id))
+    } else {
+      setOutlookMail([])
+    }
+  }
+
   const refresh = async () => {
     setError(null)
     try {
       const [healthResult, me] = await Promise.all([getHealth(), getMe()])
       setHealth(`${healthResult.status} · ${healthResult.service}`)
       setUserLabel(`${me.displayName} · ${me.authMode}`)
-      await Promise.all([refreshInbox(), refreshTasks()])
+      await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts()])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reach API')
       setHealth('offline')
@@ -80,6 +100,19 @@ export default function App() {
   }
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const outlook = params.get('outlook')
+    if (outlook === 'connected') {
+      setActive('Admin')
+      setStatusBanner(
+        `Outlook connected${params.get('address') ? `: ${params.get('address')}` : ''}`,
+      )
+      window.history.replaceState({}, '', '/')
+    } else if (outlook === 'error') {
+      setActive('Admin')
+      setError(params.get('message') || 'Outlook connection failed')
+      window.history.replaceState({}, '', '/')
+    }
     void refresh()
   }, [])
 
@@ -184,8 +217,40 @@ export default function App() {
     }
   }
 
+  const onConnectOutlook = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await beginMicrosoftAuthorize()
+      window.location.href = result.authorizationUrl
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start Outlook connection')
+      setBusy(false)
+    }
+  }
+
+  const onDisconnect = async (accountId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await disconnectAccount(accountId)
+      await refreshAccounts()
+      setStatusBanner('Outlook disconnected')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not disconnect Outlook')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const title =
-    active === 'Inbox' ? 'Unified inbox' : active === 'Tasks' ? 'Tasks & reminders' : active
+    active === 'Inbox'
+      ? 'Unified inbox'
+      : active === 'Tasks'
+        ? 'Tasks & reminders'
+        : active === 'Admin'
+          ? 'Connectors & admin'
+          : active
 
   return (
     <div className="shell">
@@ -224,6 +289,7 @@ export default function App() {
         </header>
 
         {error && <p className="error">{error}</p>}
+        {statusBanner && <p className="banner">{statusBanner}</p>}
 
         {active === 'Inbox' && (
           <section className="inbox-layout">
@@ -385,7 +451,77 @@ export default function App() {
           </section>
         )}
 
-        {active !== 'Inbox' && active !== 'Tasks' && (
+        {active === 'Admin' && (
+          <section className="admin">
+            <div className="panel">
+              <h2>Connect Outlook</h2>
+              <p>
+                Pilot mailbox: <code>palantir.pilot.aanthony@outlook.com</code>
+              </p>
+              <div className="actions" style={{ marginTop: '1rem' }}>
+                <button type="button" onClick={() => void onConnectOutlook()} disabled={busy}>
+                  {busy ? 'Redirecting…' : 'Connect Outlook'}
+                </button>
+              </div>
+            </div>
+
+            <div className="list" style={{ marginTop: '1rem' }}>
+              {accounts.length === 0 ? (
+                <div className="empty">
+                  <h2>No connected accounts</h2>
+                  <p>Connect the pilot Outlook mailbox to read recent mail via Microsoft Graph.</p>
+                </div>
+              ) : (
+                accounts.map((account) => (
+                  <article key={account.id} className="row task-row">
+                    <div>
+                      <h3>{account.primaryAddress || account.displayName || account.id}</h3>
+                      <p>
+                        {account.provider} · {account.connectionStatus}
+                        {account.lastSuccessfulSyncAt
+                          ? ` · synced ${new Date(account.lastSuccessfulSyncAt).toLocaleString()}`
+                          : ''}
+                      </p>
+                    </div>
+                    {account.connectionStatus !== 'Revoked' && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void onDisconnect(account.id)}
+                        disabled={busy}
+                      >
+                        Disconnect
+                      </button>
+                    )}
+                  </article>
+                ))
+              )}
+            </div>
+
+            {outlookMail.length > 0 && (
+              <div className="list" style={{ marginTop: '1rem' }}>
+                <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Recent Outlook mail</h2>
+                {outlookMail.map((mail) => (
+                  <article key={mail.id} className="row">
+                    <div>
+                      <h3>{mail.subject || '(no subject)'}</h3>
+                      <p>
+                        {mail.from || 'unknown'} · {mail.preview}
+                      </p>
+                    </div>
+                    {mail.receivedAt && (
+                      <time dateTime={mail.receivedAt}>
+                        {new Date(mail.receivedAt).toLocaleString()}
+                      </time>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {active !== 'Inbox' && active !== 'Tasks' && active !== 'Admin' && (
           <section className="panel placeholder">
             <h2>{active}</h2>
             <p>Coming in a later phase — Phase 2 covers inbox messaging and tasks.</p>

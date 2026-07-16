@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Palantir.Application.Abstractions;
 using Palantir.Application.Audit;
+using Palantir.Application.Connectors;
+using Palantir.Infrastructure.Connectors;
 using Palantir.Infrastructure.Persistence;
 using Palantir.Infrastructure.Services;
 
@@ -30,8 +32,15 @@ public static class InfrastructureServiceCollectionExtensions
             }
         });
 
+        services.Configure<MicrosoftGraphOptions>(
+            configuration.GetSection(MicrosoftGraphOptions.SectionName));
+
+        services.AddMemoryCache();
+        services.AddHttpClient("microsoft-graph");
         services.AddScoped<IPalantirDbContext>(sp => sp.GetRequiredService<PalantirDbContext>());
         services.AddScoped<IAuditEventWriter, AuditEventWriter>();
+        services.AddSingleton<IConnectorCredentialStore, DataProtectionCredentialStore>();
+        services.AddScoped<IMicrosoftGraphConnectorService, MicrosoftGraphConnectorService>();
 
         return services;
     }

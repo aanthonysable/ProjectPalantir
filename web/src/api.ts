@@ -125,3 +125,39 @@ export const createTask = (title: string, description?: string) =>
 
 export const completeTask = (taskId: string) =>
   api<TaskItem>(`/tasks/${taskId}/complete`, { method: 'POST' })
+
+export type ConnectedAccount = {
+  id: string
+  userId: string
+  provider: string
+  displayName: string | null
+  primaryAddress: string | null
+  connectionStatus: string
+  grantedScopesJson: string | null
+  lastSuccessfulSyncAt: string | null
+  updatedAt: string
+}
+
+export type OutlookMessage = {
+  id: string
+  subject: string | null
+  from: string | null
+  preview: string | null
+  receivedAt: string | null
+  isRead: boolean
+}
+
+export const beginMicrosoftAuthorize = () =>
+  api<{ authorizationUrl: string; state: string }>(
+    '/connected-accounts/microsoft/authorize',
+    { method: 'POST' },
+  )
+
+export const listConnectedAccounts = () =>
+  api<ConnectedAccount[]>('/connected-accounts')
+
+export const disconnectAccount = (connectedAccountId: string) =>
+  api<void>(`/connected-accounts/${connectedAccountId}`, { method: 'DELETE' })
+
+export const listOutlookMail = (connectedAccountId: string, top = 15) =>
+  api<OutlookMessage[]>(`/connected-accounts/${connectedAccountId}/mail?top=${top}`)

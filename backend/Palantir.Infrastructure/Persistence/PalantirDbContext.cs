@@ -38,6 +38,8 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     IQueryable<AuditEvent> IPalantirDbContext.AuditEvents => AuditEvents;
     IQueryable<WorkflowAction> IPalantirDbContext.WorkflowActions => WorkflowActions;
     IQueryable<TaskItem> IPalantirDbContext.TaskItems => TaskItems;
+    IQueryable<ConnectedAccount> IPalantirDbContext.ConnectedAccounts => ConnectedAccounts;
+    IQueryable<OAuthGrant> IPalantirDbContext.OAuthGrants => OAuthGrants;
 
     public new void Add<TEntity>(TEntity entity) where TEntity : class => base.Add(entity);
 

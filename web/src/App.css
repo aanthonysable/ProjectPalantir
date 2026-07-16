@@ -200,6 +200,20 @@
   margin-bottom: 1rem;
 }
 
+.banner {
+  color: #9fd9b8;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
 .inbox-layout {
   display: grid;
   grid-template-columns: minmax(280px, 380px) 1fr;

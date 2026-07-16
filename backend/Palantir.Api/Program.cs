@@ -61,6 +61,7 @@ else
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
+builder.Services.AddDataProtection();
 
 var app = builder.Build();
 

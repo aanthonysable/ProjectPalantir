@@ -13,6 +13,8 @@ public interface IPalantirDbContext
     IQueryable<AuditEvent> AuditEvents { get; }
     IQueryable<WorkflowAction> WorkflowActions { get; }
     IQueryable<TaskItem> TaskItems { get; }
+    IQueryable<ConnectedAccount> ConnectedAccounts { get; }
+    IQueryable<OAuthGrant> OAuthGrants { get; }
 
     void Add<TEntity>(TEntity entity) where TEntity : class;
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
