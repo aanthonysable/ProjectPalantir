@@ -36,16 +36,14 @@ import {
 } from './api'
 import './App.css'
 
-const navItems = [
-  'Today',
-  'Inbox',
-  'Assistant',
-  'Tasks',
-  'Projects',
-  'Customers',
-  'Approvals',
-  'Admin',
-]
+const readyNavItems = ['Inbox', 'Tasks', 'Approvals', 'Admin'] as const
+const soonNavItems = ['Today', 'Assistant', 'Projects', 'Customers'] as const
+const navItems = [...readyNavItems, ...soonNavItems] as const
+type NavItem = (typeof navItems)[number]
+
+function isReadyNav(item: NavItem): item is (typeof readyNavItems)[number] {
+  return (readyNavItems as readonly string[]).includes(item)
+}
 
 function assigneeLabel(conversation: Conversation, currentUserId: string | null) {
   if (!conversation.assignedUserId) return 'Unassigned'
@@ -57,7 +55,7 @@ export default function App() {
   const [session, setSession] = useState<SessionUser | null>(() => getStoredSession())
   const [loginEmail, setLoginEmail] = useState('demo@palantir.local')
   const [loginPassword, setLoginPassword] = useState('pilot-demo')
-  const [active, setActive] = useState('Inbox')
+  const [active, setActive] = useState<NavItem>('Inbox')
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -446,10 +444,11 @@ export default function App() {
           </label>
           {error && <p className="error">{error}</p>}
           <button type="submit" disabled={busy}>
-            Sign in
+            {busy ? 'Signing in…' : 'Sign in'}
           </button>
           <p className="muted login-hint">
-            Pilot demo: <code>demo@palantir.local</code> / <code>pilot-demo</code>
+            Credentials are prefilled for the pilot walkthrough (
+            <code>demo@palantir.local</code> / <code>pilot-demo</code>).
           </p>
         </form>
       </div>
@@ -467,16 +466,35 @@ export default function App() {
           </div>
         </div>
         <nav>
-          {navItems.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={item === active ? 'nav active' : 'nav'}
-              onClick={() => setActive(item)}
-            >
-              {item}
-            </button>
-          ))}
+          {navItems.map((item) => {
+            const soon = !isReadyNav(item)
+            const approvalCount =
+              item === 'Approvals' && pendingApprovals.length > 0
+                ? pendingApprovals.length
+                : 0
+            return (
+              <button
+                key={item}
+                type="button"
+                className={[
+                  'nav',
+                  item === active ? 'active' : '',
+                  soon ? 'soon' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => setActive(item)}
+              >
+                <span>{item}</span>
+                {approvalCount > 0 && (
+                  <span className="nav-badge" aria-label={`${approvalCount} pending`}>
+                    {approvalCount}
+                  </span>
+                )}
+                {soon && <span className="nav-soon">Soon</span>}
+              </button>
+            )
+          })}
         </nav>
       </aside>
 
@@ -488,15 +506,15 @@ export default function App() {
           </div>
           <div className="meta">
             <span>{userLabel}</span>
-            <button type="button" className="ghost" onClick={onLogout}>
-              Sign out
-            </button>
             <span className={connectedOutlook ? 'pill ok' : 'pill'}>
               {connectedOutlook
                 ? `Outlook · ${connectedOutlook.primaryAddress ?? 'connected'}`
                 : 'Outlook · not connected'}
             </span>
             <span className={health.startsWith('ok') ? 'pill ok' : 'pill'}>{health}</span>
+            <button type="button" className="sign-out" onClick={onLogout}>
+              Sign out
+            </button>
           </div>
         </header>
 
@@ -533,8 +551,12 @@ export default function App() {
               <div className="list">
                 {conversations.length === 0 ? (
                   <div className="empty">
-                    <h2>No conversations yet</h2>
-                    <p>Create one above, then claim it and add messages or notes.</p>
+                    <h2>Inbox is empty</h2>
+                    <p>
+                      {connectedOutlook
+                        ? 'Click Sync Outlook above to pull in pilot mail, or start a local conversation.'
+                        : 'Connect Outlook in Admin, then Sync Outlook here to load pilot mail.'}
+                    </p>
                   </div>
                 ) : (
                   conversations.map((item) => (
@@ -703,7 +725,10 @@ export default function App() {
               {pendingApprovals.length === 0 ? (
                 <div className="empty">
                   <h2>No pending approvals</h2>
-                  <p>From an Email conversation, write a reply and click Request send.</p>
+                  <p>
+                    Open an Email thread in Inbox, write a reply, then click Request send — drafts
+                    land here for Approve &amp; send.
+                  </p>
                 </div>
               ) : (
                 pendingApprovals.map((item) => (
@@ -740,16 +765,22 @@ export default function App() {
             <div className="panel">
               <h2>Connect Outlook</h2>
               <p>
+                Demo path: Connect the pilot mailbox → Sync into Inbox → reply from an Email
+                thread → approve in Approvals.
+              </p>
+              <p className="muted" style={{ marginTop: '0.5rem' }}>
                 Pilot mailbox: <code>palantir.pilot.aanthony@outlook.com</code>
               </p>
               <p className="muted" style={{ marginTop: '0.5rem' }}>
                 {canSendMail
-                  ? 'Mail.Read + Mail.Send granted.'
-                  : 'After adding Mail.Send in Azure, disconnect and connect again to consent.'}
+                  ? 'Mail.Read + Mail.Send granted — ready to sync and send.'
+                  : connectedOutlook
+                    ? 'Connected for read. After adding Mail.Send in Azure, disconnect and connect again to consent send.'
+                    : 'Not connected yet — use Connect Outlook to authorize Graph access.'}
               </p>
               <div className="actions" style={{ marginTop: '1rem' }}>
                 <button type="button" onClick={() => void onConnectOutlook()} disabled={busy}>
-                  {busy ? 'Redirecting…' : 'Connect Outlook'}
+                  {busy ? 'Redirecting…' : connectedOutlook ? 'Reconnect Outlook' : 'Connect Outlook'}
                 </button>
                 {accounts.some(
                   (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
@@ -817,13 +848,13 @@ export default function App() {
           </section>
         )}
 
-        {active !== 'Inbox' &&
-          active !== 'Tasks' &&
-          active !== 'Approvals' &&
-          active !== 'Admin' && (
+        {!isReadyNav(active) && (
           <section className="panel placeholder">
             <h2>{active}</h2>
-            <p>Coming in a later phase — Phase 2 covers inbox messaging and tasks.</p>
+            <p>
+              Not in this pilot demo. Use Inbox, Admin (connect &amp; sync), then Approvals for the
+              walkthrough.
+            </p>
           </section>
         )}
       </main>
