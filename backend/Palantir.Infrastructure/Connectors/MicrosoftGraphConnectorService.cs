@@ -281,6 +281,62 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
             .ToList();
     }
 
+    public async Task<OutlookMessageDto?> GetMailMessageAsync(
+        Guid connectedAccountId,
+        Guid userId,
+        string providerMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(providerMessageId))
+        {
+            return null;
+        }
+
+        var account = _db.ConnectedAccounts.FirstOrDefault(a => a.Id == connectedAccountId && a.UserId == userId)
+            ?? throw new InvalidOperationException("Connected account was not found.");
+
+        if (account.ConnectionStatus != ConnectionStatus.Connected)
+        {
+            throw new InvalidOperationException($"Mailbox connection status is '{account.ConnectionStatus}'.");
+        }
+
+        var accessToken = await GetValidAccessTokenAsync(account, cancellationToken);
+        var client = _httpClientFactory.CreateClient("microsoft-graph");
+        var id = Uri.EscapeDataString(providerMessageId);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"https://graph.microsoft.com/v1.0/me/messages/{id}?$select=id,subject,from,bodyPreview,body,receivedDateTime,isRead,conversationId");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning(
+                "GetMailMessage failed for {MessageId}: {Status} {Body}",
+                providerMessageId,
+                (int)response.StatusCode,
+                body);
+            return null;
+        }
+
+        var m = JsonSerializer.Deserialize<GraphMessage>(body, JsonOptions);
+        if (m is null)
+        {
+            return null;
+        }
+
+        return new OutlookMessageDto(
+            m.Id ?? providerMessageId,
+            m.Subject,
+            m.From?.EmailAddress?.Address,
+            m.BodyPreview,
+            m.ReceivedDateTime,
+            m.IsRead ?? false,
+            m.ConversationId,
+            NormalizeGraphBody(m.Body));
+    }
+
     public async Task SendMailAsync(
         Guid connectedAccountId,
         Guid userId,

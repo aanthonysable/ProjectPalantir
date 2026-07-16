@@ -51,6 +51,12 @@ public interface IMicrosoftGraphConnectorService
         int top = 20,
         CancellationToken cancellationToken = default);
 
+    Task<OutlookMessageDto?> GetMailMessageAsync(
+        Guid connectedAccountId,
+        Guid userId,
+        string providerMessageId,
+        CancellationToken cancellationToken = default);
+
     Task SendMailAsync(
         Guid connectedAccountId,
         Guid userId,

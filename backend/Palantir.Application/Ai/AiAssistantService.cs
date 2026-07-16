@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Palantir.Application.Abstractions;
 using Palantir.Application.Audit;
+using Palantir.Application.Connectors;
 using Palantir.Application.Outbound;
 using Palantir.Domain.Entities;
 
@@ -12,17 +13,20 @@ public sealed class AiAssistantService : IAiAssistantService
     private readonly IPalantirDbContext _db;
     private readonly IAiCompletionClient _ai;
     private readonly IOutboundEmailService _outbound;
+    private readonly IMicrosoftGraphConnectorService _graph;
     private readonly IAuditEventWriter _audit;
 
     public AiAssistantService(
         IPalantirDbContext db,
         IAiCompletionClient ai,
         IOutboundEmailService outbound,
+        IMicrosoftGraphConnectorService graph,
         IAuditEventWriter audit)
     {
         _db = db;
         _ai = ai;
         _outbound = outbound;
+        _graph = graph;
         _audit = audit;
     }
 
@@ -34,7 +38,8 @@ public sealed class AiAssistantService : IAiAssistantService
     {
         EnsureConfigured();
         var conversation = RequireConversation(conversationId);
-        var transcript = BuildTranscript(conversationId);
+        await EnsureFullEmailBodiesAsync(conversation, userId, cancellationToken);
+        var transcript = BuildTranscript(conversationId, includePriorAiSummaries: false);
 
         var summary = (await _ai.CompleteAsync(
             [
@@ -44,6 +49,7 @@ public sealed class AiAssistantService : IAiAssistantService
                     You are Palantir, an AI assistant for Sable Automation Solutions.
                     Summarize the conversation for an employee who needs to act quickly.
                     Rules:
+                    - Use the FULL message bodies in the transcript (not just previews).
                     - Be concise (3-6 short bullets or a short paragraph).
                     - Call out open questions, urgency, and suggested next action.
                     - Do not invent facts that are not in the transcript.
@@ -103,7 +109,8 @@ public sealed class AiAssistantService : IAiAssistantService
     {
         EnsureConfigured();
         var conversation = RequireConversation(conversationId);
-        var transcript = BuildTranscript(conversationId);
+        await EnsureFullEmailBodiesAsync(conversation, userId, cancellationToken);
+        var transcript = BuildTranscript(conversationId, includePriorAiSummaries: false);
 
         var draftBody = (await _ai.CompleteAsync(
             [
@@ -113,6 +120,7 @@ public sealed class AiAssistantService : IAiAssistantService
                     You are Palantir, an AI assistant for Sable Automation Solutions.
                     Draft a professional email reply the employee can review before sending.
                     Rules:
+                    - Use the FULL message bodies in the transcript (not just previews).
                     - Output ONLY the email body text (no subject line, no markdown fences).
                     - Be concise, courteous, and specific to the transcript.
                     - Do not invent commitments, pricing, or technical claims.
@@ -171,13 +179,74 @@ public sealed class AiAssistantService : IAiAssistantService
         _db.Conversations.FirstOrDefault(c => c.Id == conversationId)
         ?? throw new InvalidOperationException($"Conversation '{conversationId}' was not found.");
 
-    private string BuildTranscript(Guid conversationId)
+    /// <summary>
+    /// For Email threads, pull full Graph bodies before AI so summaries/drafts are not based on previews.
+    /// </summary>
+    private async Task EnsureFullEmailBodiesAsync(
+        Conversation conversation,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(conversation.Channel, "Email", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var messages = _db.Messages
+            .Where(m => m.ConversationId == conversation.Id && m.ProviderMessageId != null)
+            .ToList();
+
+        var changed = false;
+        foreach (var message in messages)
+        {
+            var accountId = TryReadConnectedAccountId(message.ProviderMetadataJson);
+            if (accountId is null || string.IsNullOrWhiteSpace(message.ProviderMessageId))
+            {
+                continue;
+            }
+
+            try
+            {
+                var full = await _graph.GetMailMessageAsync(
+                    accountId.Value,
+                    userId,
+                    message.ProviderMessageId,
+                    cancellationToken);
+                if (full is null || string.IsNullOrWhiteSpace(full.BodyText))
+                {
+                    continue;
+                }
+
+                var from = string.IsNullOrWhiteSpace(full.From) ? "unknown sender" : full.From;
+                var newBody = $"From: {from}\n\n{full.BodyText}".Trim();
+                if (string.IsNullOrWhiteSpace(message.Body) || newBody.Length > message.Body.Length + 20)
+                {
+                    message.Body = newBody;
+                    message.Summary = full.Preview;
+                    changed = true;
+                }
+            }
+            catch
+            {
+                // Keep stored body; AI will still run on what we have.
+            }
+        }
+
+        if (changed)
+        {
+            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private string BuildTranscript(Guid conversationId, bool includePriorAiSummaries)
     {
         var messages = _db.Messages
             .Where(m => m.ConversationId == conversationId)
             .ToList()
             .OrderBy(m => m.CreatedAt)
-            .TakeLast(30)
+            .TakeLast(50)
+            .Where(m => includePriorAiSummaries || m.Summary != "AI summary")
             .ToList();
 
         if (messages.Count == 0)
@@ -197,6 +266,30 @@ public sealed class AiAssistantService : IAiAssistantService
         }
 
         return sb.ToString().Trim();
+    }
+
+    private static Guid? TryReadConnectedAccountId(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            if (doc.RootElement.TryGetProperty("connectedAccountId", out var id) &&
+                Guid.TryParse(id.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
     }
 
     private static string StripFence(string text)
