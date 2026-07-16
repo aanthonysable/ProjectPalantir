@@ -133,8 +133,8 @@ Each event stores organization, actor user id, entity type/id, and optional JSON
 
 ## 12. Open items for IT / security
 
-- [ ] Entra External ID (or approved IdP) replacing local passwords
-- [ ] Corporate Graph app registration & admin-consent path
+- [ ] Entra External ID tenant created and `Authentication:EntraExternalId` enabled (see `docs/12_entra_external_id_setup.md`)
+- [ ] Corporate Graph app registration & admin-consent path (work mailbox)
 - [ ] Retention / DLP / eDiscovery alignment
 - [ ] Incident response contacts and severity matrix
 - [ ] Named pilot user list and exit criteria

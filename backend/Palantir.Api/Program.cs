@@ -72,9 +72,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization();
 
+builder.Services.Configure<EntraExternalIdOptions>(
+    builder.Configuration.GetSection(EntraExternalIdOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
 builder.Services.AddScoped<IPilotAuthService, PilotAuthService>();
+builder.Services.AddScoped<IEntraExternalIdAuthService, EntraExternalIdAuthService>();
 builder.Services.AddDataProtection();
 
 var app = builder.Build();

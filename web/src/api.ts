@@ -127,6 +127,22 @@ export type LoginResult = SessionUser & {
   expiresAt: string
 }
 
+export type EntraProviderConfig = {
+  enabled: boolean
+  authority: string
+  clientId: string
+  audience: string
+  tenantId: string
+  scopes: string[]
+}
+
+export type AuthProviders = {
+  localPasswordEnabled: boolean
+  entraExternalId: EntraProviderConfig | null
+}
+
+export const getAuthProviders = () => api<AuthProviders>('/auth/providers')
+
 export const login = async (email: string, password: string) => {
   const result = await api<LoginResult>('/auth/login', {
     method: 'POST',
@@ -150,6 +166,27 @@ export const registerPilotUser = async (
   const result = await api<LoginResult>('/auth/register', {
     method: 'POST',
     body: JSON.stringify({ email, password, displayName }),
+  })
+  storeSession(result.accessToken, {
+    userId: result.userId,
+    organizationId: result.organizationId,
+    displayName: result.displayName,
+    email: result.email,
+    authMode: result.authMode,
+  })
+  return result
+}
+
+export const exchangeEntraToken = async (tokens: {
+  idToken?: string
+  accessToken?: string
+}) => {
+  const result = await api<LoginResult>('/auth/entra/exchange', {
+    method: 'POST',
+    body: JSON.stringify({
+      idToken: tokens.idToken ?? null,
+      accessToken: tokens.accessToken ?? null,
+    }),
   })
   storeSession(result.accessToken, {
     userId: result.userId,

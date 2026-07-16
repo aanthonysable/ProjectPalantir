@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import {
   ApiError,
   ApprovalItem,
+  AuthProviders,
   ConnectedAccount,
   Conversation,
   Message,
@@ -18,7 +19,9 @@ import {
   createReplyForApproval,
   createTask,
   disconnectAccount,
+  exchangeEntraToken,
   getAccessToken,
+  getAuthProviders,
   getHealth,
   getMe,
   getStoredSession,
@@ -37,6 +40,7 @@ import {
   summarizeConversation,
   syncOutlookInbox,
 } from './api'
+import { signInWithEntra } from './entraAuth'
 import './App.css'
 
 const readyNavItems = ['Inbox', 'Tasks', 'Approvals', 'Admin'] as const
@@ -62,6 +66,7 @@ export default function App() {
   const [registerName, setRegisterName] = useState('')
   const [registerEmail, setRegisterEmail] = useState('')
   const [registerPassword, setRegisterPassword] = useState('')
+  const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null)
   const [active, setActive] = useState<NavItem>('Inbox')
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
@@ -160,6 +165,9 @@ export default function App() {
       setHealth('signed out')
       setUserLabel('Signed out')
     }
+    void getAuthProviders()
+      .then(setAuthProviders)
+      .catch(() => setAuthProviders(null))
   }, [])
 
   useEffect(() => {
@@ -171,6 +179,30 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Could not load messages'),
     )
   }, [selectedId, session])
+
+  const onEntraSignIn = async () => {
+    const entra = authProviders?.entraExternalId
+    if (!entra?.enabled) return
+    setBusy(true)
+    setError(null)
+    try {
+      const tokens = await signInWithEntra(entra)
+      const result = await exchangeEntraToken(tokens)
+      setSession({
+        userId: result.userId,
+        organizationId: result.organizationId,
+        displayName: result.displayName,
+        email: result.email,
+        authMode: result.authMode,
+      })
+      setStatusBanner(`Signed in with Microsoft as ${result.displayName}`)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Microsoft sign-in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const onLogin = async (event: FormEvent) => {
     event.preventDefault()
@@ -538,6 +570,11 @@ export default function App() {
                 ? 'Create account'
                 : 'Sign in'}
           </button>
+          {!showRegister && authProviders?.entraExternalId?.enabled && (
+            <button type="button" className="ghost" disabled={busy} onClick={() => void onEntraSignIn()}>
+              {busy ? 'Opening Microsoft…' : 'Sign in with Microsoft'}
+            </button>
+          )}
           <button
             type="button"
             className="ghost"
@@ -550,10 +587,15 @@ export default function App() {
             {showRegister ? 'Back to sign in' : 'Create another pilot user'}
           </button>
           <p className="muted login-hint">
-            Your account: <code>alec.anthony@dnow.com</code> / <code>pilot-demo</code>
+            Local pilot: <code>alec.anthony@dnow.com</code> / <code>pilot-demo</code>
             <br />
-            Second user for claim/assign demos: <code>demo@palantir.local</code> /{' '}
-            <code>pilot-demo</code>
+            Second user: <code>demo@palantir.local</code> / <code>pilot-demo</code>
+            {!authProviders?.entraExternalId?.enabled && (
+              <>
+                <br />
+                Microsoft / Entra sign-in appears after External ID is configured (see docs).
+              </>
+            )}
           </p>
         </form>
       </div>
@@ -888,11 +930,13 @@ export default function App() {
             <div className="panel">
               <h2>Connect Outlook</h2>
               <p>
-                Demo path: Connect the pilot mailbox → Sync into Inbox → reply from an Email
-                thread → approve in Approvals.
+                Connect a Microsoft mailbox (pilot or work). You&apos;ll pick an account at
+                Microsoft sign-in — work accounts may route through Okta.
               </p>
               <p className="muted" style={{ marginTop: '0.5rem' }}>
-                Pilot mailbox: <code>palantir.pilot.aanthony@outlook.com</code>
+                Known-good pilot: <code>palantir.pilot.aanthony@outlook.com</code>
+                <br />
+                Work try: sign in as <code>alec.anthony@dnow.com</code> when Microsoft asks.
               </p>
               <p className="muted" style={{ marginTop: '0.5rem' }}>
                 {canSendMail

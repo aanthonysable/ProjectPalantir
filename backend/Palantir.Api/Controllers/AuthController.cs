@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 using Palantir.Api.Auth;
 using Palantir.Application.Auth;
 
@@ -10,11 +11,17 @@ namespace Palantir.Api.Controllers;
 public sealed class AuthController : ControllerBase
 {
     private readonly IPilotAuthService _auth;
+    private readonly IEntraExternalIdAuthService _entra;
 
-    public AuthController(IPilotAuthService auth)
+    public AuthController(IPilotAuthService auth, IEntraExternalIdAuthService entra)
     {
         _auth = auth;
+        _entra = entra;
     }
+
+    [AllowAnonymous]
+    [HttpGet("providers")]
+    public ActionResult<AuthProvidersDto> Providers() => Ok(_entra.GetProviders());
 
     [AllowAnonymous]
     [HttpPost("login")]
@@ -51,6 +58,34 @@ public sealed class AuthController : ControllerBase
                     body.OrganizationId),
                 cancellationToken);
             return Created("/me", result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Exchange an Entra External ID (or workforce) access/ID token for a Palantir pilot JWT.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("entra/exchange")]
+    public async Task<ActionResult<PilotLoginResult>> ExchangeEntra(
+        [FromBody] EntraExchangeBody? body,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var token = body?.IdToken
+                        ?? body?.AccessToken
+                        ?? Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase);
+
+            var result = await _entra.ExchangeAsync(token ?? string.Empty, cancellationToken);
+            return Ok(result);
+        }
+        catch (SecurityTokenException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -97,4 +132,10 @@ public sealed class RegisterBody
     public string? Password { get; set; }
     public string? DisplayName { get; set; }
     public Guid? OrganizationId { get; set; }
+}
+
+public sealed class EntraExchangeBody
+{
+    public string? IdToken { get; set; }
+    public string? AccessToken { get; set; }
 }

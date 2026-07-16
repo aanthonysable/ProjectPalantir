@@ -74,7 +74,7 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
             ["state"] = state,
             ["code_challenge"] = challenge,
             ["code_challenge_method"] = "S256",
-            ["prompt"] = "consent"
+            ["prompt"] = "select_account"
         };
 
         var queryString = string.Join('&', query.Select(kv =>
