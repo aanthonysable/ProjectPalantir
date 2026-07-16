@@ -12,6 +12,7 @@ public interface IPalantirDbContext
     IQueryable<ApprovalRequest> ApprovalRequests { get; }
     IQueryable<AuditEvent> AuditEvents { get; }
     IQueryable<WorkflowAction> WorkflowActions { get; }
+    IQueryable<TaskItem> TaskItems { get; }
 
     void Add<TEntity>(TEntity entity) where TEntity : class;
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

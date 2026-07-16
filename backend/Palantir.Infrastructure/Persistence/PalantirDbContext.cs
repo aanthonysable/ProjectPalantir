@@ -37,6 +37,7 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     IQueryable<ApprovalRequest> IPalantirDbContext.ApprovalRequests => ApprovalRequests;
     IQueryable<AuditEvent> IPalantirDbContext.AuditEvents => AuditEvents;
     IQueryable<WorkflowAction> IPalantirDbContext.WorkflowActions => WorkflowActions;
+    IQueryable<TaskItem> IPalantirDbContext.TaskItems => TaskItems;
 
     public new void Add<TEntity>(TEntity entity) where TEntity : class => base.Add(entity);
 

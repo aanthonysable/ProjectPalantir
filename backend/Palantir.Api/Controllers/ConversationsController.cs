@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
+using Palantir.Api.Hubs;
 using Palantir.Application.Conversations;
 
 namespace Palantir.Api.Controllers;
@@ -21,10 +23,15 @@ public sealed class ConversationsController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<ConversationDto>>> List(
         Guid organizationId,
         [FromQuery] bool assignedToMe = false,
+        [FromQuery] bool unassigned = false,
         CancellationToken cancellationToken = default)
     {
         Guid? assignedUserId = assignedToMe ? _currentUser.UserId : null;
-        var items = await _conversations.ListAsync(organizationId, assignedUserId, cancellationToken);
+        var items = await _conversations.ListAsync(
+            organizationId,
+            assignedUserId,
+            unassigned ? true : null,
+            cancellationToken);
         return Ok(items);
     }
 
@@ -41,7 +48,7 @@ public sealed class ConversationsController : ControllerBase
                 body.Subject,
                 body.CustomerId,
                 body.ProjectId,
-                body.AssignedUserId ?? _currentUser.UserId),
+                body.AssignedUserId),
             _currentUser.UserId,
             cancellationToken);
 

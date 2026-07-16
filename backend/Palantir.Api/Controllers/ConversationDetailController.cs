@@ -1,21 +1,27 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
+using Palantir.Api.Hubs;
 using Palantir.Application.Conversations;
 
 namespace Palantir.Api.Controllers;
 
 [ApiController]
 [Route("conversations/{conversationId:guid}")]
-[ApiExplorerSettings(GroupName = "ConversationDetail")]
 public sealed class ConversationDetailController : ControllerBase
 {
     private readonly IConversationService _conversations;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IHubContext<NotificationsHub> _hub;
 
-    public ConversationDetailController(IConversationService conversations, ICurrentUserAccessor currentUser)
+    public ConversationDetailController(
+        IConversationService conversations,
+        ICurrentUserAccessor currentUser,
+        IHubContext<NotificationsHub> hub)
     {
         _conversations = conversations;
         _currentUser = currentUser;
+        _hub = hub;
     }
 
     [HttpGet]
@@ -25,13 +31,22 @@ public sealed class ConversationDetailController : ControllerBase
         return conversation is null ? NotFound() : Ok(conversation);
     }
 
+    [HttpGet("messages")]
+    public async Task<ActionResult<IReadOnlyList<MessageDto>>> ListMessages(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var messages = await _conversations.ListMessagesAsync(conversationId, cancellationToken);
+        return Ok(messages);
+    }
+
     [HttpPost("messages")]
-    public async Task<IActionResult> AddMessage(
+    public async Task<ActionResult<MessageDto>> AddMessage(
         Guid conversationId,
         [FromBody] AddMessageBody body,
         CancellationToken cancellationToken)
     {
-        await _conversations.AddMessageAsync(
+        var message = await _conversations.AddMessageAsync(
             conversationId,
             new AddMessageRequest(
                 body.Direction,
@@ -40,7 +55,61 @@ public sealed class ConversationDetailController : ControllerBase
                 body.IsInternalNote),
             cancellationToken);
 
-        return Created($"conversations/{conversationId}/messages", null);
+        var conversation = await _conversations.GetAsync(conversationId, cancellationToken);
+        if (conversation is not null)
+        {
+            await _hub.Clients.Group($"org:{conversation.OrganizationId}")
+                .SendAsync("conversation.message_added", new { conversationId, message }, cancellationToken);
+        }
+
+        return Created($"/conversations/{conversationId}/messages/{message.Id}", message);
+    }
+
+    [HttpPost("claim")]
+    public async Task<ActionResult<ConversationDto>> Claim(Guid conversationId, CancellationToken cancellationToken)
+    {
+        if (_currentUser.UserId is null)
+        {
+            return BadRequest("X-Palantir-User-Id header is required in the pilot.");
+        }
+
+        try
+        {
+            var result = await _conversations.ClaimAsync(conversationId, _currentUser.UserId.Value, cancellationToken);
+            await _hub.Clients.Group($"org:{result.OrganizationId}")
+                .SendAsync("conversation.updated", result, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("assign")]
+    public async Task<ActionResult<ConversationDto>> Assign(
+        Guid conversationId,
+        [FromBody] AssignBody body,
+        CancellationToken cancellationToken)
+    {
+        var result = await _conversations.AssignAsync(
+            conversationId,
+            new AssignConversationRequest(body.UserId, body.TeamId),
+            _currentUser.UserId,
+            cancellationToken);
+
+        await _hub.Clients.Group($"org:{result.OrganizationId}")
+            .SendAsync("conversation.updated", result, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost("release")]
+    public async Task<ActionResult<ConversationDto>> Release(Guid conversationId, CancellationToken cancellationToken)
+    {
+        var result = await _conversations.ReleaseAsync(conversationId, _currentUser.UserId, cancellationToken);
+        await _hub.Clients.Group($"org:{result.OrganizationId}")
+            .SendAsync("conversation.updated", result, cancellationToken);
+        return Ok(result);
     }
 }
 
@@ -50,4 +119,10 @@ public sealed class AddMessageBody
     public string? Body { get; set; }
     public Guid? SenderUserId { get; set; }
     public bool IsInternalNote { get; set; }
+}
+
+public sealed class AssignBody
+{
+    public Guid? UserId { get; set; }
+    public Guid? TeamId { get; set; }
 }
