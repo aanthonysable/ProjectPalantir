@@ -1,0 +1,6 @@
+@Palantir.Api_HostAddress = http://localhost:5251
+
+GET {{Palantir.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -1,0 +1,229 @@
+.shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.rail {
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.brand {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.brand-mark {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.55rem;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: #8fd4b0;
+  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-weight: 600;
+}
+
+.brand strong {
+  display: block;
+  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.brand p {
+  margin: 0.1rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.rail nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nav {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.nav:hover,
+.nav.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.stage {
+  padding: 1.5rem 2rem 2rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+
+.topbar h1 {
+  margin: 0.2rem 0 0;
+  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-size: 1.85rem;
+  font-weight: 600;
+}
+
+.meta {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  background: var(--bg-panel);
+}
+
+.pill.ok {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: #9fd9b8;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.composer input {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+
+.composer button,
+.panel button {
+  background: var(--accent);
+  color: #07140e;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.85rem 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.row,
+.empty,
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+}
+
+.row h3,
+.empty h2,
+.panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.row p,
+.empty p,
+.panel p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.row time {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.empty,
+.placeholder {
+  padding: 2rem 1.25rem;
+}
+
+.error {
+  color: #f0b2a6;
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+@media (max-width: 840px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .rail nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .stage {
+    padding: 1rem;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+}

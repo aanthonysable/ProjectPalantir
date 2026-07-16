@@ -29,6 +29,9 @@ obj/
 *.nupkg
 TestResults/
 *.DotSettings.user
+*.db
+*.db-shm
+*.db-wal
 
 # Node / frontend
 node_modules/
@@ -45,3 +48,4 @@ local.settings.json
 # Logs
 *.log
 logs/
+
