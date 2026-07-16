@@ -31,8 +31,15 @@ public sealed record MeResult(
     string Email,
     string AuthMode);
 
+public sealed record PilotRegisterRequest(
+    string Email,
+    string Password,
+    string DisplayName,
+    Guid? OrganizationId = null);
+
 public interface IPilotAuthService
 {
     Task<PilotLoginResult> LoginAsync(PilotLoginRequest request, CancellationToken cancellationToken = default);
+    Task<PilotLoginResult> RegisterAsync(PilotRegisterRequest request, CancellationToken cancellationToken = default);
     Task<MeResult?> GetMeAsync(Guid userId, CancellationToken cancellationToken = default);
 }

@@ -30,6 +30,7 @@ import {
   listTasks,
   login,
   logout,
+  registerPilotUser,
   rejectRequest,
   releaseConversation,
   draftReplyWithAi,
@@ -55,8 +56,12 @@ function assigneeLabel(conversation: Conversation, currentUserId: string | null)
 
 export default function App() {
   const [session, setSession] = useState<SessionUser | null>(() => getStoredSession())
-  const [loginEmail, setLoginEmail] = useState('demo@palantir.local')
+  const [loginEmail, setLoginEmail] = useState('alec.anthony@dnow.com')
   const [loginPassword, setLoginPassword] = useState('pilot-demo')
+  const [showRegister, setShowRegister] = useState(false)
+  const [registerName, setRegisterName] = useState('')
+  const [registerEmail, setRegisterEmail] = useState('')
+  const [registerPassword, setRegisterPassword] = useState('')
   const [active, setActive] = useState<NavItem>('Inbox')
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
@@ -184,6 +189,33 @@ export default function App() {
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onRegister = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await registerPilotUser(
+        registerEmail.trim(),
+        registerPassword,
+        registerName.trim(),
+      )
+      setSession({
+        userId: result.userId,
+        organizationId: result.organizationId,
+        displayName: result.displayName,
+        email: result.email,
+        authMode: result.authMode,
+      })
+      setStatusBanner(`Account created — signed in as ${result.displayName}`)
+      setShowRegister(false)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create account')
     } finally {
       setBusy(false)
     }
@@ -450,7 +482,7 @@ export default function App() {
   if (!session) {
     return (
       <div className="login-shell">
-        <form className="login-card" onSubmit={onLogin}>
+        <form className="login-card" onSubmit={showRegister ? onRegister : onLogin}>
           <div className="brand">
             <span className="brand-mark">P</span>
             <div>
@@ -458,12 +490,25 @@ export default function App() {
               <p>Sable pilot sign-in</p>
             </div>
           </div>
+          {showRegister && (
+            <label>
+              Display name
+              <input
+                value={registerName}
+                onChange={(e) => setRegisterName(e.target.value)}
+                autoComplete="name"
+                required
+              />
+            </label>
+          )}
           <label>
             Email
             <input
               type="email"
-              value={loginEmail}
-              onChange={(e) => setLoginEmail(e.target.value)}
+              value={showRegister ? registerEmail : loginEmail}
+              onChange={(e) =>
+                showRegister ? setRegisterEmail(e.target.value) : setLoginEmail(e.target.value)
+              }
               autoComplete="username"
               required
             />
@@ -472,19 +517,43 @@ export default function App() {
             Password
             <input
               type="password"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              autoComplete="current-password"
+              value={showRegister ? registerPassword : loginPassword}
+              onChange={(e) =>
+                showRegister
+                  ? setRegisterPassword(e.target.value)
+                  : setLoginPassword(e.target.value)
+              }
+              autoComplete={showRegister ? 'new-password' : 'current-password'}
               required
+              minLength={showRegister ? 8 : undefined}
             />
           </label>
           {error && <p className="error">{error}</p>}
           <button type="submit" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
+            {busy
+              ? showRegister
+                ? 'Creating…'
+                : 'Signing in…'
+              : showRegister
+                ? 'Create account'
+                : 'Sign in'}
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy}
+            onClick={() => {
+              setShowRegister((v) => !v)
+              setError(null)
+            }}
+          >
+            {showRegister ? 'Back to sign in' : 'Create another pilot user'}
           </button>
           <p className="muted login-hint">
-            Credentials are prefilled for the pilot walkthrough (
-            <code>demo@palantir.local</code> / <code>pilot-demo</code>).
+            Your account: <code>alec.anthony@dnow.com</code> / <code>pilot-demo</code>
+            <br />
+            Second user for claim/assign demos: <code>demo@palantir.local</code> /{' '}
+            <code>pilot-demo</code>
           </p>
         </form>
       </div>

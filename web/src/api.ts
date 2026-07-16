@@ -142,6 +142,25 @@ export const login = async (email: string, password: string) => {
   return result
 }
 
+export const registerPilotUser = async (
+  email: string,
+  password: string,
+  displayName: string,
+) => {
+  const result = await api<LoginResult>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ email, password, displayName }),
+  })
+  storeSession(result.accessToken, {
+    userId: result.userId,
+    organizationId: result.organizationId,
+    displayName: result.displayName,
+    email: result.email,
+    authMode: result.authMode,
+  })
+  return result
+}
+
 export const logout = () => {
   clearSession()
 }

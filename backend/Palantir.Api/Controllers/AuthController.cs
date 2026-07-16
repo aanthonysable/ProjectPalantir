@@ -34,6 +34,29 @@ public sealed class AuthController : ControllerBase
             return Unauthorized(new { error = ex.Message });
         }
     }
+
+    [AllowAnonymous]
+    [HttpPost("register")]
+    public async Task<ActionResult<PilotLoginResult>> Register(
+        [FromBody] RegisterBody body,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _auth.RegisterAsync(
+                new PilotRegisterRequest(
+                    body.Email ?? string.Empty,
+                    body.Password ?? string.Empty,
+                    body.DisplayName ?? string.Empty,
+                    body.OrganizationId),
+                cancellationToken);
+            return Created("/me", result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 }
 
 [ApiController]
@@ -66,4 +89,12 @@ public sealed class LoginBody
 {
     public string? Email { get; set; }
     public string? Password { get; set; }
+}
+
+public sealed class RegisterBody
+{
+    public string? Email { get; set; }
+    public string? Password { get; set; }
+    public string? DisplayName { get; set; }
+    public Guid? OrganizationId { get; set; }
 }

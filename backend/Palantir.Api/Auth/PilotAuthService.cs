@@ -70,6 +70,73 @@ public sealed class PilotAuthService : IPilotAuthService
             AuthMode);
     }
 
+    public async Task<PilotLoginResult> RegisterAsync(
+        PilotRegisterRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Email) ||
+            string.IsNullOrWhiteSpace(request.Password) ||
+            string.IsNullOrWhiteSpace(request.DisplayName))
+        {
+            throw new InvalidOperationException("Email, password, and display name are required.");
+        }
+
+        if (request.Password.Length < 8)
+        {
+            throw new InvalidOperationException("Password must be at least 8 characters.");
+        }
+
+        var email = request.Email.Trim().ToLowerInvariant();
+        var password = request.Password;
+        var exists = await _db.Users.AnyAsync(u => u.Email.ToLower() == email, cancellationToken);
+        if (exists)
+        {
+            throw new InvalidOperationException($"A user with email '{email}' already exists.");
+        }
+
+        var organizationId = request.OrganizationId ?? await ResolveDefaultOrganizationIdAsync(cancellationToken);
+        var user = new User
+        {
+            OrganizationId = organizationId,
+            DisplayName = request.DisplayName.Trim(),
+            Email = email,
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        var identity = new ExternalIdentity
+        {
+            UserId = user.Id,
+            Provider = "palantir-pilot",
+            Issuer = _options.Issuer,
+            ProviderSubjectId = $"pilot-{user.Id:N}",
+            Email = email,
+            IsLoginEnabled = true
+        };
+
+        var credential = new LocalPilotCredential
+        {
+            UserId = user.Id,
+            PasswordHash = _passwordHasher.HashPassword(user, password),
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        _db.Add(user);
+        _db.Add(identity);
+        _db.Add(credential);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(Math.Clamp(_options.LifetimeHours, 1, 72));
+        return new PilotLoginResult(
+            CreateToken(user, expiresAt),
+            expiresAt,
+            user.Id,
+            user.OrganizationId,
+            user.DisplayName,
+            user.Email,
+            AuthMode);
+    }
+
     public async Task<MeResult?> GetMeAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var user = await _db.Users
@@ -79,6 +146,21 @@ public sealed class PilotAuthService : IPilotAuthService
         return user is null
             ? null
             : new MeResult(user.Id, user.OrganizationId, user.DisplayName, user.Email, AuthMode);
+    }
+
+    private async Task<Guid> ResolveDefaultOrganizationIdAsync(CancellationToken cancellationToken)
+    {
+        var orgId = await _db.Organizations
+            .OrderBy(o => o.Name)
+            .Select(o => o.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (orgId == Guid.Empty)
+        {
+            throw new InvalidOperationException("No organization exists yet. Restart the API to seed the pilot org.");
+        }
+
+        return orgId;
     }
 
     private string CreateToken(User user, DateTimeOffset expiresAt)
