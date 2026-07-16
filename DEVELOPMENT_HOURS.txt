@@ -1,0 +1,23 @@
+Project Palantir — Development Hours Log
+========================================
+Owner: Alec Anthony
+Purpose: Track active development time (coding, debugging, config, testing).
+Do not count idle waiting, pure meetings without hands-on work, or overnight.
+
+How to log
+----------
+Add a line under Entries (newest at bottom is fine):
+  YYYY-MM-DD | H.H | short note of what you worked on
+
+Then update Running total.
+
+Running total
+-------------
+3.5 hours
+
+Entries
+-------
+2026-07-16 | 3.5 | Day 1 foundation through Phase 2–4 pilot: API/web scaffold, Outlook Graph connect/sync/send, approvals, Ollama AI, pilot + Entra External ID login, full message bodies, thread sort. Session ~11:30–16:20 minus inactive break ~13:00–14:30.
+
+# Template for next entry:
+# 2026-07-17 | 0.0 | description
