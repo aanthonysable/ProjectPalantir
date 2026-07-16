@@ -1,33 +1,37 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
+  ApiError,
   ApprovalItem,
   ConnectedAccount,
   Conversation,
   Message,
   OutlookMessage,
+  SessionUser,
   TaskItem,
-  DEMO_USER_ID,
   addMessage,
   approveRequest,
   beginMicrosoftAuthorize,
   claimConversation,
+  clearSession,
   completeTask,
   createConversation,
   createReplyForApproval,
   createTask,
   disconnectAccount,
-  draftReplyWithAi,
+  getAccessToken,
   getHealth,
   getMe,
+  getStoredSession,
   listApprovals,
   listConnectedAccounts,
   listConversations,
   listMessages,
   listOutlookMail,
   listTasks,
+  login,
+  logout,
   rejectRequest,
   releaseConversation,
-  summarizeConversation,
   syncOutlookInbox,
 } from './api'
 import './App.css'
@@ -43,13 +47,16 @@ const navItems = [
   'Admin',
 ]
 
-function assigneeLabel(conversation: Conversation) {
+function assigneeLabel(conversation: Conversation, currentUserId: string | null) {
   if (!conversation.assignedUserId) return 'Unassigned'
-  if (conversation.assignedUserId === DEMO_USER_ID) return 'Assigned to you'
+  if (currentUserId && conversation.assignedUserId === currentUserId) return 'Assigned to you'
   return `Assigned · ${conversation.assignedUserId.slice(0, 8)}`
 }
 
 export default function App() {
+  const [session, setSession] = useState<SessionUser | null>(() => getStoredSession())
+  const [loginEmail, setLoginEmail] = useState('demo@palantir.local')
+  const [loginPassword, setLoginPassword] = useState('pilot-demo')
   const [active, setActive] = useState('Inbox')
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
@@ -69,6 +76,7 @@ export default function App() {
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
+  const currentUserId = session?.userId ?? null
 
   const refreshInbox = async () => {
     const inbox = await listConversations()
@@ -103,8 +111,20 @@ export default function App() {
       const [healthResult, me] = await Promise.all([getHealth(), getMe()])
       setHealth(`${healthResult.status} · ${healthResult.service}`)
       setUserLabel(`${me.displayName} · ${me.authMode}`)
+      setSession({
+        userId: me.userId,
+        organizationId: me.organizationId,
+        displayName: me.displayName,
+        email: me.email,
+        authMode: me.authMode,
+      })
       await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts(), refreshApprovals()])
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setSession(null)
+        setUserLabel('Signed out')
+        return
+      }
       setError(err instanceof Error ? err.message : 'Failed to reach API')
       setHealth('offline')
     }
@@ -129,19 +149,60 @@ export default function App() {
       setError(decodeURIComponent(raw.replace(/\+/g, ' ')))
       window.history.replaceState({}, '', '/')
     }
-    void refresh()
+    if (getAccessToken()) {
+      void refresh()
+    } else {
+      setHealth('signed out')
+      setUserLabel('Signed out')
+    }
   }, [])
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedId || !session) {
       setMessages([])
       return
     }
     void loadMessages(selectedId).catch((err) =>
       setError(err instanceof Error ? err.message : 'Could not load messages'),
     )
-  }, [selectedId])
+  }, [selectedId, session])
 
+  const onLogin = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await login(loginEmail.trim(), loginPassword)
+      setSession({
+        userId: result.userId,
+        organizationId: result.organizationId,
+        displayName: result.displayName,
+        email: result.email,
+        authMode: result.authMode,
+      })
+      setStatusBanner(`Signed in as ${result.displayName}`)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onLogout = () => {
+    logout()
+    clearSession()
+    setSession(null)
+    setConversations([])
+    setTasks([])
+    setAccounts([])
+    setApprovals([])
+    setMessages([])
+    setSelectedId(null)
+    setUserLabel('Signed out')
+    setHealth('signed out')
+    setStatusBanner('Signed out')
+  }
   const onCreate = async (event: FormEvent) => {
     event.preventDefault()
     if (!subject.trim()) return
@@ -213,40 +274,6 @@ export default function App() {
       await refreshApprovals()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onSummarize = async () => {
-    if (!selectedId) return
-    setBusy(true)
-    setError(null)
-    try {
-      await summarizeConversation(selectedId)
-      setStatusBanner('AI summary saved as an internal note.')
-      await Promise.all([loadMessages(selectedId), refreshInbox()])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Summarize failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onAiDraft = async () => {
-    if (!selectedId) return
-    setBusy(true)
-    setError(null)
-    try {
-      const draft = await draftReplyWithAi(selectedId, messageBody.trim() || undefined)
-      setMessageBody('')
-      setStatusBanner(
-        `AI draft queued for approval → ${draft.toAddress}. Review in Approvals before send.`,
-      )
-      await refreshApprovals()
-      setActive('Approvals')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI draft failed')
     } finally {
       setBusy(false)
     }
@@ -386,6 +413,49 @@ export default function App() {
             ? 'Connectors & admin'
             : active
 
+  if (!session) {
+    return (
+      <div className="login-shell">
+        <form className="login-card" onSubmit={onLogin}>
+          <div className="brand">
+            <span className="brand-mark">P</span>
+            <div>
+              <strong>Palantir</strong>
+              <p>Sable pilot sign-in</p>
+            </div>
+          </div>
+          <label>
+            Email
+            <input
+              type="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              autoComplete="username"
+              required
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" disabled={busy}>
+            Sign in
+          </button>
+          <p className="muted login-hint">
+            Pilot demo: <code>demo@palantir.local</code> / <code>pilot-demo</code>
+          </p>
+        </form>
+      </div>
+    )
+  }
+
   return (
     <div className="shell">
       <aside className="rail">
@@ -418,6 +488,9 @@ export default function App() {
           </div>
           <div className="meta">
             <span>{userLabel}</span>
+            <button type="button" className="ghost" onClick={onLogout}>
+              Sign out
+            </button>
             <span className={connectedOutlook ? 'pill ok' : 'pill'}>
               {connectedOutlook
                 ? `Outlook · ${connectedOutlook.primaryAddress ?? 'connected'}`
@@ -474,7 +547,7 @@ export default function App() {
                       <div>
                         <h3>{item.subject || 'Untitled conversation'}</h3>
                         <p>
-                          {item.channel} · {item.status} · {assigneeLabel(item)}
+                          {item.channel} · {item.status} · {assigneeLabel(item, currentUserId)}
                         </p>
                       </div>
                       <time dateTime={item.updatedAt}>
@@ -497,28 +570,10 @@ export default function App() {
                   <div className="thread-header">
                     <div>
                       <h2>{selected.subject || 'Untitled conversation'}</h2>
-                      <p>{assigneeLabel(selected)}</p>
+                      <p>{assigneeLabel(selected, currentUserId)}</p>
                     </div>
                     <div className="actions">
-                      <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
-                        Summarize
-                      </button>
-                      {selected.channel === 'Email' && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => void onAiDraft()}
-                          disabled={busy || !canSendMail}
-                          title={
-                            canSendMail
-                              ? 'Draft with AI, then approve before send'
-                              : 'Connect Outlook with Mail.Send first'
-                          }
-                        >
-                          AI draft
-                        </button>
-                      )}
-                      {!selected.assignedUserId || selected.assignedUserId !== DEMO_USER_ID ? (
+                      {!selected.assignedUserId || selected.assignedUserId !== currentUserId ? (
                         <button type="button" onClick={onClaim} disabled={busy}>
                           Claim
                         </button>
@@ -648,9 +703,7 @@ export default function App() {
               {pendingApprovals.length === 0 ? (
                 <div className="empty">
                   <h2>No pending approvals</h2>
-                  <p>
-                    From an Email conversation, write a reply and Request send — or use AI draft.
-                  </p>
+                  <p>From an Email conversation, write a reply and click Request send.</p>
                 </div>
               ) : (
                 pendingApprovals.map((item) => (

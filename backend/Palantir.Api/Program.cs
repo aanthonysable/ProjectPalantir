@@ -1,10 +1,13 @@
+using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Palantir.Api;
 using Palantir.Api.Auth;
 using Palantir.Api.Hubs;
+using Palantir.Application.Auth;
 using Palantir.Application.DependencyInjection;
 using Palantir.Infrastructure.DependencyInjection;
 using Palantir.Infrastructure.Persistence;
@@ -20,6 +23,15 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo { Title = "Project Palantir API", Version = "v0.1" });
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Pilot JWT from POST /auth/login",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
 });
 builder.Services.AddSignalR();
 builder.Services.AddCors(options =>
@@ -37,30 +49,32 @@ builder.Services.AddCors(options =>
 builder.Services.AddPalantirApplication();
 builder.Services.AddPalantirInfrastructure(builder.Configuration);
 
-// Pilot auth placeholder: JWT is optional until Entra External ID is configured.
-var authority = builder.Configuration["Authentication:Authority"];
-if (!string.IsNullOrWhiteSpace(authority))
-{
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
-        {
-            options.Authority = authority;
-            options.Audience = builder.Configuration["Authentication:Audience"];
-            options.RequireHttpsMetadata = true;
-            options.TokenValidationParameters.ValidateAudience = true;
-        });
-    builder.Services.AddAuthorization();
-}
-else
-{
-    builder.Services.AddAuthorization(options =>
+var pilotJwt = builder.Configuration.GetSection(PilotJwtOptions.SectionName).Get<PilotJwtOptions>()
+    ?? new PilotJwtOptions();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
-        options.FallbackPolicy = null;
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = pilotJwt.Issuer,
+            ValidateAudience = true,
+            ValidAudience = pilotJwt.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(pilotJwt.SigningKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(2),
+            NameClaimType = "sub",
+            RoleClaimType = "role"
+        };
     });
-}
+builder.Services.AddAuthorization();
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
+builder.Services.AddScoped<IPilotAuthService, PilotAuthService>();
 builder.Services.AddDataProtection();
 
 var app = builder.Build();
@@ -69,7 +83,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<PalantirDbContext>();
     await db.Database.MigrateAsync();
-    await DevDataSeeder.SeedAsync(db);
+    await DevDataSeeder.SeedAsync(db, scope.ServiceProvider);
 }
 
 if (app.Environment.IsDevelopment())
@@ -79,10 +93,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("WebDev");
-if (!string.IsNullOrWhiteSpace(authority))
-{
-    app.UseAuthentication();
-}
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<NotificationsHub>("/hubs/notifications");

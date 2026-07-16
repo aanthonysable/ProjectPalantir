@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Palantir.Infrastructure.Persistence;
 
@@ -10,9 +11,11 @@ using Palantir.Infrastructure.Persistence;
 namespace Palantir.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PalantirDbContext))]
-    partial class PalantirDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260716174452_AddLocalPilotCredentials")]
+    partial class AddLocalPilotCredentials
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.17");

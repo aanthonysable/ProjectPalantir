@@ -401,3 +401,48 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.login-card input {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+}
+
+.login-hint {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.login-hint code {
+  color: var(--text);
+}

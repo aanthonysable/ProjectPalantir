@@ -1,5 +1,13 @@
-export const DEMO_ORGANIZATION_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-export const DEMO_USER_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+const TOKEN_KEY = 'palantir.accessToken'
+const SESSION_KEY = 'palantir.session'
+
+export type SessionUser = {
+  userId: string
+  organizationId: string
+  displayName: string
+  email: string
+  authMode: string
+}
 
 export type Conversation = {
   id: string
@@ -38,11 +46,48 @@ export type TaskItem = {
   createdAt: string
 }
 
-const headers = (): HeadersInit => ({
-  'Content-Type': 'application/json',
-  'X-Palantir-User-Id': DEMO_USER_ID,
-  'X-Palantir-Organization-Id': DEMO_ORGANIZATION_ID,
-})
+export function getAccessToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function getStoredSession(): SessionUser | null {
+  const raw = localStorage.getItem(SESSION_KEY)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as SessionUser
+  } catch {
+    return null
+  }
+}
+
+export function clearSession() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(SESSION_KEY)
+}
+
+function storeSession(token: string, user: SessionUser) {
+  localStorage.setItem(TOKEN_KEY, token)
+  localStorage.setItem(SESSION_KEY, JSON.stringify(user))
+}
+
+const headers = (): HeadersInit => {
+  const h: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  const token = getAccessToken()
+  if (token) {
+    h.Authorization = `Bearer ${token}`
+  }
+  return h
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -53,9 +98,21 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
 
+  if (response.status === 401) {
+    clearSession()
+    throw new ApiError(401, 'Sign in required')
+  }
+
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(text || `Request failed (${response.status})`)
+    let message = text || `Request failed (${response.status})`
+    try {
+      const json = JSON.parse(text) as { error?: string }
+      if (json.error) message = json.error
+    } catch {
+      // keep raw text
+    }
+    throw new ApiError(response.status, message)
   }
 
   if (response.status === 204) {
@@ -65,17 +122,59 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type LoginResult = SessionUser & {
+  accessToken: string
+  expiresAt: string
+}
+
+export const login = async (email: string, password: string) => {
+  const result = await api<LoginResult>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+  storeSession(result.accessToken, {
+    userId: result.userId,
+    organizationId: result.organizationId,
+    displayName: result.displayName,
+    email: result.email,
+    authMode: result.authMode,
+  })
+  return result
+}
+
+export const logout = () => {
+  clearSession()
+}
+
 export const getHealth = () =>
   api<{ status: string; service: string }>('/health')
 
 export const getMe = () =>
-  api<{ displayName: string; email: string; authMode: string }>('/me')
+  api<{
+    userId: string
+    organizationId: string
+    displayName: string
+    email: string
+    authMode: string
+  }>('/me')
+
+function orgId(): string {
+  const session = getStoredSession()
+  if (!session?.organizationId) throw new Error('Not signed in')
+  return session.organizationId
+}
+
+function userId(): string {
+  const session = getStoredSession()
+  if (!session?.userId) throw new Error('Not signed in')
+  return session.userId
+}
 
 export const listConversations = () =>
-  api<Conversation[]>(`/organizations/${DEMO_ORGANIZATION_ID}/conversations`)
+  api<Conversation[]>(`/organizations/${orgId()}/conversations`)
 
 export const createConversation = (subject: string) =>
-  api<Conversation>(`/organizations/${DEMO_ORGANIZATION_ID}/conversations`, {
+  api<Conversation>(`/organizations/${orgId()}/conversations`, {
     method: 'POST',
     body: JSON.stringify({
       channel: 'Internal',
@@ -100,7 +199,7 @@ export const addMessage = (
       direction: options?.direction ?? 'Outbound',
       body,
       isInternalNote: options?.isInternalNote ?? false,
-      senderUserId: DEMO_USER_ID,
+      senderUserId: userId(),
     }),
   })
 
@@ -111,16 +210,16 @@ export const releaseConversation = (conversationId: string) =>
   api<Conversation>(`/conversations/${conversationId}/release`, { method: 'POST' })
 
 export const listTasks = () =>
-  api<TaskItem[]>(`/tasks?organizationId=${DEMO_ORGANIZATION_ID}`)
+  api<TaskItem[]>(`/tasks?organizationId=${orgId()}`)
 
 export const createTask = (title: string, description?: string) =>
   api<TaskItem>('/tasks', {
     method: 'POST',
     body: JSON.stringify({
-      organizationId: DEMO_ORGANIZATION_ID,
+      organizationId: orgId(),
       title,
       description,
-      assignedToUserId: DEMO_USER_ID,
+      assignedToUserId: userId(),
     }),
   })
 

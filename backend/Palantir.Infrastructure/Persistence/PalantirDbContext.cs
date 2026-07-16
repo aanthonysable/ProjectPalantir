@@ -28,6 +28,7 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     public DbSet<TaskItem> TaskItems => Set<TaskItem>();
     public DbSet<Connector> Connectors => Set<Connector>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<LocalPilotCredential> LocalPilotCredentials => Set<LocalPilotCredential>();
 
     IQueryable<Organization> IPalantirDbContext.Organizations => Organizations;
     IQueryable<User> IPalantirDbContext.Users => Users;

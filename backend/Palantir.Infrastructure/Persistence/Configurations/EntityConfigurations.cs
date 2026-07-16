@@ -224,3 +224,15 @@ public sealed class AuditEventConfiguration : IEntityTypeConfiguration<AuditEven
         builder.HasOne(x => x.ActorUser).WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.SetNull);
     }
 }
+
+public sealed class LocalPilotCredentialConfiguration : IEntityTypeConfiguration<LocalPilotCredential>
+{
+    public void Configure(EntityTypeBuilder<LocalPilotCredential> builder)
+    {
+        builder.ToTable("LocalPilotCredentials");
+        builder.HasKey(x => x.UserId);
+        builder.Property(x => x.PasswordHash).IsRequired();
+        builder.HasOne(x => x.User).WithOne().HasForeignKey<LocalPilotCredential>(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}

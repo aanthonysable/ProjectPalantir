@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Palantir.Application.Abstractions;
 using Palantir.Application.Ai;
 using Palantir.Application.Audit;
+using Palantir.Application.Auth;
 using Palantir.Application.Connectors;
 using Palantir.Infrastructure.Ai;
 using Palantir.Infrastructure.Connectors;
@@ -37,6 +38,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.Configure<MicrosoftGraphOptions>(
             configuration.GetSection(MicrosoftGraphOptions.SectionName));
         services.Configure<AiOptions>(configuration.GetSection(AiOptions.SectionName));
+        services.Configure<PilotJwtOptions>(configuration.GetSection(PilotJwtOptions.SectionName));
 
         services.AddMemoryCache();
         services.AddHttpClient("microsoft-graph");
