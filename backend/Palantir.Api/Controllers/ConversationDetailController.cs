@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
 using Palantir.Api.Hubs;
+using Palantir.Application.Ai;
 using Palantir.Application.Conversations;
 using Palantir.Application.Outbound;
 
@@ -13,17 +14,20 @@ public sealed class ConversationDetailController : ControllerBase
 {
     private readonly IConversationService _conversations;
     private readonly IOutboundEmailService _outbound;
+    private readonly IAiAssistantService _ai;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IHubContext<NotificationsHub> _hub;
 
     public ConversationDetailController(
         IConversationService conversations,
         IOutboundEmailService outbound,
+        IAiAssistantService ai,
         ICurrentUserAccessor currentUser,
         IHubContext<NotificationsHub> hub)
     {
         _conversations = conversations;
         _outbound = outbound;
+        _ai = ai;
         _currentUser = currentUser;
         _hub = hub;
     }
@@ -135,6 +139,72 @@ public sealed class ConversationDetailController : ControllerBase
                 _currentUser.UserId.Value,
                 body.Body ?? string.Empty,
                 body.ConnectedAccountId,
+                createdByAi: false,
+                cancellationToken);
+
+            await _hub.Clients.Group($"user:{_currentUser.UserId}")
+                .SendAsync("approval.created", result, cancellationToken);
+
+            return Created($"/approvals/{result.ApprovalId}", result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("ai/summarize")]
+    public async Task<ActionResult<ConversationSummaryResult>> Summarize(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.UserId is null || _currentUser.OrganizationId is null)
+        {
+            return BadRequest("X-Palantir-User-Id and X-Palantir-Organization-Id headers are required.");
+        }
+
+        try
+        {
+            var result = await _ai.SummarizeConversationAsync(
+                conversationId,
+                _currentUser.OrganizationId.Value,
+                _currentUser.UserId.Value,
+                cancellationToken);
+
+            await _hub.Clients.Group($"org:{_currentUser.OrganizationId}")
+                .SendAsync("conversation.message_added", new
+                {
+                    conversationId,
+                    messageId = result.InternalNoteMessageId
+                }, cancellationToken);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("ai/draft-reply")]
+    public async Task<ActionResult<ReplyDraftResult>> DraftReply(
+        Guid conversationId,
+        [FromBody] AiDraftReplyBody? body,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.UserId is null || _currentUser.OrganizationId is null)
+        {
+            return BadRequest("X-Palantir-User-Id and X-Palantir-Organization-Id headers are required.");
+        }
+
+        try
+        {
+            var result = await _ai.DraftReplyForApprovalAsync(
+                conversationId,
+                _currentUser.OrganizationId.Value,
+                _currentUser.UserId.Value,
+                body?.Guidance,
+                body?.ConnectedAccountId,
                 cancellationToken);
 
             await _hub.Clients.Group($"user:{_currentUser.UserId}")
@@ -166,5 +236,11 @@ public sealed class AssignBody
 public sealed class ReplyForApprovalBody
 {
     public string? Body { get; set; }
+    public Guid? ConnectedAccountId { get; set; }
+}
+
+public sealed class AiDraftReplyBody
+{
+    public string? Guidance { get; set; }
     public Guid? ConnectedAccountId { get; set; }
 }

@@ -20,6 +20,7 @@ public interface IOutboundEmailService
         Guid userId,
         string body,
         Guid? connectedAccountId = null,
+        bool createdByAi = false,
         CancellationToken cancellationToken = default);
 
     Task<ReplyDraftResult> ApproveAndSendAsync(

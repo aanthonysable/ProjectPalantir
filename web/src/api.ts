@@ -18,6 +18,7 @@ export type Message = {
   conversationId: string
   direction: string
   body: string | null
+  summary: string | null
   senderUserId: string | null
   isInternalNote: boolean
   createdAt: string
@@ -211,4 +212,21 @@ export const createReplyForApproval = (conversationId: string, body: string) =>
   api<ReplyDraftResult>(`/conversations/${conversationId}/reply-for-approval`, {
     method: 'POST',
     body: JSON.stringify({ body }),
+  })
+
+export type ConversationSummaryResult = {
+  conversationId: string
+  summary: string
+  internalNoteMessageId: string | null
+}
+
+export const summarizeConversation = (conversationId: string) =>
+  api<ConversationSummaryResult>(`/conversations/${conversationId}/ai/summarize`, {
+    method: 'POST',
+  })
+
+export const draftReplyWithAi = (conversationId: string, guidance?: string) =>
+  api<ReplyDraftResult>(`/conversations/${conversationId}/ai/draft-reply`, {
+    method: 'POST',
+    body: JSON.stringify({ guidance: guidance || null }),
   })

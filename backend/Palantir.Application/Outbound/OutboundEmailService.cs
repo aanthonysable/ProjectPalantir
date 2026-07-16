@@ -33,6 +33,7 @@ public sealed class OutboundEmailService : IOutboundEmailService
         Guid userId,
         string body,
         Guid? connectedAccountId = null,
+        bool createdByAi = false,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -61,7 +62,7 @@ public sealed class OutboundEmailService : IOutboundEmailService
         {
             ConversationId = conversationId,
             CreatedByUserId = userId,
-            CreatedByAi = false,
+            CreatedByAi = createdByAi,
             Body = body.Trim(),
             Revision = 1,
             Status = "PendingApproval",
@@ -70,7 +71,8 @@ public sealed class OutboundEmailService : IOutboundEmailService
                 kind = "outlook.reply",
                 to = toAddress,
                 subject,
-                connectedAccountId = account.Id
+                connectedAccountId = account.Id,
+                createdByAi
             })
         };
 

@@ -18,6 +18,7 @@ public sealed record MessageDto(
     Guid ConversationId,
     string Direction,
     string? Body,
+    string? Summary,
     Guid? SenderUserId,
     bool IsInternalNote,
     DateTimeOffset CreatedAt);

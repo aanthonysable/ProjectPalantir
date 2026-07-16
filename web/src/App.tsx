@@ -16,6 +16,7 @@ import {
   createReplyForApproval,
   createTask,
   disconnectAccount,
+  draftReplyWithAi,
   getHealth,
   getMe,
   listApprovals,
@@ -26,6 +27,7 @@ import {
   listTasks,
   rejectRequest,
   releaseConversation,
+  summarizeConversation,
   syncOutlookInbox,
 } from './api'
 import './App.css'
@@ -211,6 +213,40 @@ export default function App() {
       await refreshApprovals()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onSummarize = async () => {
+    if (!selectedId) return
+    setBusy(true)
+    setError(null)
+    try {
+      await summarizeConversation(selectedId)
+      setStatusBanner('AI summary saved as an internal note.')
+      await Promise.all([loadMessages(selectedId), refreshInbox()])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Summarize failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onAiDraft = async () => {
+    if (!selectedId) return
+    setBusy(true)
+    setError(null)
+    try {
+      const draft = await draftReplyWithAi(selectedId, messageBody.trim() || undefined)
+      setMessageBody('')
+      setStatusBanner(
+        `AI draft queued for approval → ${draft.toAddress}. Review in Approvals before send.`,
+      )
+      await refreshApprovals()
+      setActive('Approvals')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI draft failed')
     } finally {
       setBusy(false)
     }
@@ -464,6 +500,24 @@ export default function App() {
                       <p>{assigneeLabel(selected)}</p>
                     </div>
                     <div className="actions">
+                      <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
+                        Summarize
+                      </button>
+                      {selected.channel === 'Email' && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void onAiDraft()}
+                          disabled={busy || !canSendMail}
+                          title={
+                            canSendMail
+                              ? 'Draft with AI, then approve before send'
+                              : 'Connect Outlook with Mail.Send first'
+                          }
+                        >
+                          AI draft
+                        </button>
+                      )}
                       {!selected.assignedUserId || selected.assignedUserId !== DEMO_USER_ID ? (
                         <button type="button" onClick={onClaim} disabled={busy}>
                           Claim
@@ -486,12 +540,18 @@ export default function App() {
                           className={msg.isInternalNote ? 'bubble note' : 'bubble'}
                         >
                           <header>
-                            <span>{msg.isInternalNote ? 'Internal note' : msg.direction}</span>
+                            <span>
+                              {msg.summary === 'AI summary'
+                                ? 'AI summary'
+                                : msg.isInternalNote
+                                  ? 'Internal note'
+                                  : msg.direction}
+                            </span>
                             <time dateTime={msg.createdAt}>
                               {new Date(msg.createdAt).toLocaleString()}
                             </time>
                           </header>
-                          <p>{msg.body}</p>
+                          <p style={{ whiteSpace: 'pre-wrap' }}>{msg.body}</p>
                         </article>
                       ))
                     )}
@@ -588,7 +648,9 @@ export default function App() {
               {pendingApprovals.length === 0 ? (
                 <div className="empty">
                   <h2>No pending approvals</h2>
-                  <p>From an Email conversation, write a reply and click Request send.</p>
+                  <p>
+                    From an Email conversation, write a reply and Request send — or use AI draft.
+                  </p>
                 </div>
               ) : (
                 pendingApprovals.map((item) => (

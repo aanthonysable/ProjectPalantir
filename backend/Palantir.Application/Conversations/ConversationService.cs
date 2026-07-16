@@ -197,5 +197,5 @@ public sealed class ConversationService : IConversationService
         new(c.Id, c.OrganizationId, c.Subject, c.Channel, c.Status, c.AssignedUserId, c.AssignedTeamId, c.CreatedAt, c.UpdatedAt);
 
     private static MessageDto MapMessage(Message m) =>
-        new(m.Id, m.ConversationId, m.Direction, m.Body, m.SenderUserId, m.IsInternalNote, m.CreatedAt);
+        new(m.Id, m.ConversationId, m.Direction, m.Body, m.Summary, m.SenderUserId, m.IsInternalNote, m.CreatedAt);
 }

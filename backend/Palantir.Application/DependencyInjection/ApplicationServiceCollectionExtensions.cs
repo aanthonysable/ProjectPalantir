@@ -1,4 +1,4 @@
-using System.Text.Json;
+using Palantir.Application.Ai;
 using Palantir.Application.Approvals;
 using Palantir.Application.Conversations;
 using Palantir.Application.Outbound;
@@ -17,6 +17,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ITaskService, TaskService>();
         services.AddScoped<IOutlookInboxSyncService, OutlookInboxSyncService>();
         services.AddScoped<IOutboundEmailService, OutboundEmailService>();
+        services.AddScoped<IAiAssistantService, AiAssistantService>();
         return services;
     }
 }
