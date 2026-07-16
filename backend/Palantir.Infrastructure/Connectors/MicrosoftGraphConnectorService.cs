@@ -74,7 +74,7 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
             ["state"] = state,
             ["code_challenge"] = challenge,
             ["code_challenge_method"] = "S256",
-            ["prompt"] = "select_account"
+            ["prompt"] = "consent"
         };
 
         var queryString = string.Join('&', query.Select(kv =>
@@ -278,6 +278,72 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
                 m.IsRead ?? false,
                 m.ConversationId))
             .ToList();
+    }
+
+    public async Task SendMailAsync(
+        Guid connectedAccountId,
+        Guid userId,
+        string toAddress,
+        string subject,
+        string body,
+        CancellationToken cancellationToken = default)
+    {
+        var account = _db.ConnectedAccounts.FirstOrDefault(a => a.Id == connectedAccountId && a.UserId == userId)
+            ?? throw new InvalidOperationException("Connected account was not found.");
+
+        if (account.ConnectionStatus != ConnectionStatus.Connected)
+        {
+            throw new InvalidOperationException($"Mailbox connection status is '{account.ConnectionStatus}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(account.GrantedScopesJson) ||
+            !account.GrantedScopesJson.Contains("Mail.Send", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Mail.Send is not granted yet. Disconnect and Connect Outlook again after adding the Mail.Send permission in Azure.");
+        }
+
+        if (string.IsNullOrWhiteSpace(toAddress))
+        {
+            throw new InvalidOperationException("A recipient address is required to send mail.");
+        }
+
+        var accessToken = await GetValidAccessTokenAsync(account, cancellationToken);
+        var client = _httpClientFactory.CreateClient("microsoft-graph");
+        var payload = new
+        {
+            message = new
+            {
+                subject,
+                body = new { contentType = "Text", content = body },
+                toRecipients = new[]
+                {
+                    new { emailAddress = new { address = toAddress } }
+                }
+            },
+            saveToSentItems = true
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/sendMail")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            MapGraphFailure(account, responseBody);
+            await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogWarning("SendMail failed: {Body}", responseBody);
+            throw new InvalidOperationException(
+                $"Microsoft Graph send failed: {(int)response.StatusCode}. {DescribeTokenError(responseBody)}");
+        }
+
+        account.LastSuccessfulSyncAt = DateTimeOffset.UtcNow;
+        account.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<string> GetValidAccessTokenAsync(ConnectedAccount account, CancellationToken cancellationToken)

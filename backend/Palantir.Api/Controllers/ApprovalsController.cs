@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
 using Palantir.Api.Hubs;
 using Palantir.Application.Approvals;
+using Palantir.Application.Outbound;
 
 namespace Palantir.Api.Controllers;
 
@@ -11,15 +12,18 @@ namespace Palantir.Api.Controllers;
 public sealed class ApprovalsController : ControllerBase
 {
     private readonly IApprovalService _approvals;
+    private readonly IOutboundEmailService _outbound;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IHubContext<NotificationsHub> _hub;
 
     public ApprovalsController(
         IApprovalService approvals,
+        IOutboundEmailService outbound,
         ICurrentUserAccessor currentUser,
         IHubContext<NotificationsHub> hub)
     {
         _approvals = approvals;
+        _outbound = outbound;
         _currentUser = currentUser;
         _hub = hub;
     }
@@ -61,17 +65,24 @@ public sealed class ApprovalsController : ControllerBase
     }
 
     [HttpPost("{approvalId:guid}/approve")]
-    public async Task<ActionResult<ApprovalDto>> Approve(Guid approvalId, CancellationToken cancellationToken)
+    public async Task<ActionResult<object>> Approve(Guid approvalId, CancellationToken cancellationToken)
     {
         if (_currentUser.UserId is null)
         {
             return BadRequest("X-Palantir-User-Id header is required in the pilot.");
         }
 
-        var result = await _approvals.ApproveAsync(approvalId, _currentUser.UserId.Value, cancellationToken);
-        await _hub.Clients.Group($"user:{result.RequestedForUserId}")
-            .SendAsync("approval.updated", result, cancellationToken);
-        return Ok(result);
+        try
+        {
+            var sent = await _outbound.ApproveAndSendAsync(approvalId, _currentUser.UserId.Value, cancellationToken);
+            await _hub.Clients.Group($"user:{_currentUser.UserId}")
+                .SendAsync("approval.updated", sent, cancellationToken);
+            return Ok(sent);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPost("{approvalId:guid}/reject")]

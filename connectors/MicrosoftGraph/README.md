@@ -7,7 +7,8 @@
 3. Redirect URI (platform **Web**) must include:
    - `http://localhost:5251/oauth/microsoft/callback`
 4. Supported account types should allow **personal Microsoft accounts** for `@outlook.com`.
-5. Delegated Graph permissions: `openid profile email offline_access User.Read Mail.Read`.
+5. Delegated Graph permissions: `openid profile email offline_access User.Read Mail.Read Mail.Send`.
+6. After adding `Mail.Send`, disconnect and Connect Outlook again so consent includes send.
 
 Pilot mailbox: `palantir.pilot.aanthony@outlook.com`
 

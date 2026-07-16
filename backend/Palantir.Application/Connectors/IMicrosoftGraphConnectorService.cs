@@ -49,4 +49,12 @@ public interface IMicrosoftGraphConnectorService
         Guid userId,
         int top = 20,
         CancellationToken cancellationToken = default);
+
+    Task SendMailAsync(
+        Guid connectedAccountId,
+        Guid userId,
+        string toAddress,
+        string subject,
+        string body,
+        CancellationToken cancellationToken = default);
 }

@@ -19,13 +19,17 @@ public sealed class ApprovalService : IApprovalService
 
     public Task<IReadOnlyList<ApprovalDto>> ListForUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var items = _db.ApprovalRequests
+        var approvals = _db.ApprovalRequests
             .Where(a => a.RequestedForUserId == userId)
             .ToList()
             .OrderByDescending(a => a.RequestedAt)
-            .Select(Map)
             .ToList();
 
+        var draftIds = approvals.Where(a => a.DraftId.HasValue).Select(a => a.DraftId!.Value).ToHashSet();
+        var drafts = _db.Drafts.Where(d => draftIds.Contains(d.Id)).ToList()
+            .ToDictionary(d => d.Id);
+
+        var items = approvals.Select(a => Map(a, a.DraftId is Guid id && drafts.TryGetValue(id, out var draft) ? draft : null)).ToList();
         return Task.FromResult<IReadOnlyList<ApprovalDto>>(items);
     }
 
@@ -55,7 +59,11 @@ public sealed class ApprovalService : IApprovalService
             JsonSerializer.Serialize(new { approval.DraftId, approval.RequestedForUserId }),
             cancellationToken);
 
-        return Map(approval);
+        var draft = request.DraftId is Guid draftId
+            ? _db.Drafts.FirstOrDefault(d => d.Id == draftId)
+            : null;
+
+        return Map(approval, draft);
     }
 
     public Task<ApprovalDto> ApproveAsync(Guid approvalId, Guid completedByUserId, CancellationToken cancellationToken = default) =>
@@ -89,9 +97,49 @@ public sealed class ApprovalService : IApprovalService
             approval.Id,
             cancellationToken: cancellationToken);
 
-        return Map(approval);
+        var draft = approval.DraftId is Guid draftId
+            ? _db.Drafts.FirstOrDefault(d => d.Id == draftId)
+            : null;
+
+        return Map(approval, draft);
     }
 
-    private static ApprovalDto Map(ApprovalRequest a) =>
-        new(a.Id, a.DraftId, a.RequestedForUserId, a.Status, a.RequestedAt, a.CompletedAt, a.CompletedByUserId);
+    private static ApprovalDto Map(ApprovalRequest a, Draft? draft)
+    {
+        string? subject = null;
+        string? to = null;
+        if (draft?.MetadataJson is not null)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(draft.MetadataJson);
+                if (doc.RootElement.TryGetProperty("subject", out var s))
+                {
+                    subject = s.GetString();
+                }
+
+                if (doc.RootElement.TryGetProperty("to", out var t))
+                {
+                    to = t.GetString();
+                }
+            }
+            catch
+            {
+                // ignore malformed metadata
+            }
+        }
+
+        return new ApprovalDto(
+            a.Id,
+            a.DraftId,
+            a.RequestedForUserId,
+            a.Status,
+            a.RequestedAt,
+            a.CompletedAt,
+            a.CompletedByUserId,
+            draft?.Body,
+            subject,
+            to,
+            draft?.ConversationId);
+    }
 }

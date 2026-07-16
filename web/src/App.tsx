@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
+  ApprovalItem,
   ConnectedAccount,
   Conversation,
   Message,
@@ -7,19 +8,23 @@ import {
   TaskItem,
   DEMO_USER_ID,
   addMessage,
+  approveRequest,
   beginMicrosoftAuthorize,
   claimConversation,
   completeTask,
   createConversation,
+  createReplyForApproval,
   createTask,
   disconnectAccount,
   getHealth,
   getMe,
+  listApprovals,
   listConnectedAccounts,
   listConversations,
   listMessages,
   listOutlookMail,
   listTasks,
+  rejectRequest,
   releaseConversation,
   syncOutlookInbox,
 } from './api'
@@ -58,6 +63,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
   const [outlookMail, setOutlookMail] = useState<OutlookMessage[]>([])
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([])
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
@@ -85,13 +91,17 @@ export default function App() {
     }
   }
 
+  const refreshApprovals = async () => {
+    setApprovals(await listApprovals())
+  }
+
   const refresh = async () => {
     setError(null)
     try {
       const [healthResult, me] = await Promise.all([getHealth(), getMe()])
       setHealth(`${healthResult.status} · ${healthResult.service}`)
       setUserLabel(`${me.displayName} · ${me.authMode}`)
-      await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts()])
+      await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts(), refreshApprovals()])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reach API')
       setHealth('offline')
@@ -153,12 +163,54 @@ export default function App() {
     setBusy(true)
     setError(null)
     try {
-      await addMessage(selectedId, messageBody.trim(), { isInternalNote: asNote })
-      setMessageBody('')
-      setAsNote(false)
-      await Promise.all([loadMessages(selectedId), refreshInbox()])
+      if (selected?.channel === 'Email' && !asNote) {
+        const draft = await createReplyForApproval(selectedId, messageBody.trim())
+        setMessageBody('')
+        setStatusBanner(
+          `Reply queued for approval → ${draft.toAddress} (${draft.subject}). Open Approvals to send.`,
+        )
+        await refreshApprovals()
+        setActive('Approvals')
+      } else {
+        await addMessage(selectedId, messageBody.trim(), { isInternalNote: asNote })
+        setMessageBody('')
+        setAsNote(false)
+        await Promise.all([loadMessages(selectedId), refreshInbox()])
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send message')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onApprove = async (approvalId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await approveRequest(approvalId)
+      setStatusBanner(`Approved and sent to ${result.toAddress}`)
+      await Promise.all([refreshApprovals(), refreshInbox()])
+      if (result.conversationId) {
+        setSelectedId(result.conversationId)
+        await loadMessages(result.conversationId)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Approve/send failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onReject = async (approvalId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await rejectRequest(approvalId)
+      setStatusBanner('Approval rejected')
+      await refreshApprovals()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reject failed')
     } finally {
       setBusy(false)
     }
@@ -282,15 +334,21 @@ export default function App() {
   const connectedOutlook = accounts.find(
     (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
   )
+  const canSendMail =
+    !!connectedOutlook?.grantedScopesJson &&
+    connectedOutlook.grantedScopesJson.toLowerCase().includes('mail.send')
+  const pendingApprovals = approvals.filter((a) => a.status === 'Pending' || a.status === '0')
 
   const title =
     active === 'Inbox'
       ? 'Unified inbox'
       : active === 'Tasks'
         ? 'Tasks & reminders'
-        : active === 'Admin'
-          ? 'Connectors & admin'
-          : active
+        : active === 'Approvals'
+          ? 'Approvals'
+          : active === 'Admin'
+            ? 'Connectors & admin'
+            : active
 
   return (
     <div className="shell">
@@ -443,7 +501,13 @@ export default function App() {
                     <input
                       value={messageBody}
                       onChange={(e) => setMessageBody(e.target.value)}
-                      placeholder={asNote ? 'Add an internal note…' : 'Write a reply…'}
+                      placeholder={
+                        asNote
+                          ? 'Add an internal note…'
+                          : selected.channel === 'Email'
+                            ? 'Write an Outlook reply (requires approval)…'
+                            : 'Write a reply…'
+                      }
                       aria-label="Message body"
                     />
                     <label className="check">
@@ -455,9 +519,14 @@ export default function App() {
                       Note
                     </label>
                     <button type="submit" disabled={busy}>
-                      Send
+                      {selected.channel === 'Email' && !asNote ? 'Request send' : 'Send'}
                     </button>
                   </form>
+                  {selected.channel === 'Email' && !canSendMail && (
+                    <p className="muted" style={{ marginTop: '0.5rem' }}>
+                      Mail.Send not granted yet — reconnect Outlook in Admin after Azure has Mail.Send.
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -508,12 +577,60 @@ export default function App() {
           </section>
         )}
 
+        {active === 'Approvals' && (
+          <section className="tasks">
+            {!canSendMail && connectedOutlook && (
+              <p className="error">
+                Reconnect Outlook in Admin to grant Mail.Send before approving outbound mail.
+              </p>
+            )}
+            <div className="list">
+              {pendingApprovals.length === 0 ? (
+                <div className="empty">
+                  <h2>No pending approvals</h2>
+                  <p>From an Email conversation, write a reply and click Request send.</p>
+                </div>
+              ) : (
+                pendingApprovals.map((item) => (
+                  <article key={item.id} className="row task-row">
+                    <div>
+                      <h3>{item.draftSubject || 'Outbound reply'}</h3>
+                      <p>
+                        To {item.draftTo || 'unknown'} · {item.status}
+                      </p>
+                      <p style={{ marginTop: '0.5rem', whiteSpace: 'pre-wrap' }}>{item.draftBody}</p>
+                    </div>
+                    <div className="actions">
+                      <button type="button" onClick={() => void onApprove(item.id)} disabled={busy}>
+                        Approve & send
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void onReject(item.id)}
+                        disabled={busy}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
         {active === 'Admin' && (
           <section className="admin">
             <div className="panel">
               <h2>Connect Outlook</h2>
               <p>
                 Pilot mailbox: <code>palantir.pilot.aanthony@outlook.com</code>
+              </p>
+              <p className="muted" style={{ marginTop: '0.5rem' }}>
+                {canSendMail
+                  ? 'Mail.Read + Mail.Send granted.'
+                  : 'After adding Mail.Send in Azure, disconnect and connect again to consent.'}
               </p>
               <div className="actions" style={{ marginTop: '1rem' }}>
                 <button type="button" onClick={() => void onConnectOutlook()} disabled={busy}>
@@ -585,7 +702,10 @@ export default function App() {
           </section>
         )}
 
-        {active !== 'Inbox' && active !== 'Tasks' && active !== 'Admin' && (
+        {active !== 'Inbox' &&
+          active !== 'Tasks' &&
+          active !== 'Approvals' &&
+          active !== 'Admin' && (
           <section className="panel placeholder">
             <h2>{active}</h2>
             <p>Coming in a later phase — Phase 2 covers inbox messaging and tasks.</p>

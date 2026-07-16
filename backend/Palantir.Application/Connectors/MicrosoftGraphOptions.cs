@@ -20,7 +20,8 @@ public sealed class MicrosoftGraphOptions
         "email",
         "offline_access",
         "User.Read",
-        "Mail.Read"
+        "Mail.Read",
+        "Mail.Send"
     ];
     public string ExpectedPilotMailbox { get; set; } = string.Empty;
 }

@@ -9,7 +9,11 @@ public sealed record ApprovalDto(
     ApprovalStatus Status,
     DateTimeOffset RequestedAt,
     DateTimeOffset? CompletedAt,
-    Guid? CompletedByUserId);
+    Guid? CompletedByUserId,
+    string? DraftBody = null,
+    string? DraftSubject = null,
+    string? DraftTo = null,
+    Guid? ConversationId = null);
 
 public sealed record CreateApprovalRequest(
     Guid OrganizationId,

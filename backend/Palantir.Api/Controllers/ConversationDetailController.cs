@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
 using Palantir.Api.Hubs;
 using Palantir.Application.Conversations;
+using Palantir.Application.Outbound;
 
 namespace Palantir.Api.Controllers;
 
@@ -11,15 +12,18 @@ namespace Palantir.Api.Controllers;
 public sealed class ConversationDetailController : ControllerBase
 {
     private readonly IConversationService _conversations;
+    private readonly IOutboundEmailService _outbound;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IHubContext<NotificationsHub> _hub;
 
     public ConversationDetailController(
         IConversationService conversations,
+        IOutboundEmailService outbound,
         ICurrentUserAccessor currentUser,
         IHubContext<NotificationsHub> hub)
     {
         _conversations = conversations;
+        _outbound = outbound;
         _currentUser = currentUser;
         _hub = hub;
     }
@@ -111,6 +115,38 @@ public sealed class ConversationDetailController : ControllerBase
             .SendAsync("conversation.updated", result, cancellationToken);
         return Ok(result);
     }
+
+    [HttpPost("reply-for-approval")]
+    public async Task<ActionResult<ReplyDraftResult>> ReplyForApproval(
+        Guid conversationId,
+        [FromBody] ReplyForApprovalBody body,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.UserId is null || _currentUser.OrganizationId is null)
+        {
+            return BadRequest("X-Palantir-User-Id and X-Palantir-Organization-Id headers are required.");
+        }
+
+        try
+        {
+            var result = await _outbound.CreateReplyForApprovalAsync(
+                conversationId,
+                _currentUser.OrganizationId.Value,
+                _currentUser.UserId.Value,
+                body.Body ?? string.Empty,
+                body.ConnectedAccountId,
+                cancellationToken);
+
+            await _hub.Clients.Group($"user:{_currentUser.UserId}")
+                .SendAsync("approval.created", result, cancellationToken);
+
+            return Created($"/approvals/{result.ApprovalId}", result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 }
 
 public sealed class AddMessageBody
@@ -125,4 +161,10 @@ public sealed class AssignBody
 {
     public Guid? UserId { get; set; }
     public Guid? TeamId { get; set; }
+}
+
+public sealed class ReplyForApprovalBody
+{
+    public string? Body { get; set; }
+    public Guid? ConnectedAccountId { get; set; }
 }

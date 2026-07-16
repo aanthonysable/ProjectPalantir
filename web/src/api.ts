@@ -174,3 +174,41 @@ export const syncOutlookInbox = (connectedAccountId: string, top = 25) =>
   api<OutlookSyncResult>(`/connected-accounts/${connectedAccountId}/sync?top=${top}`, {
     method: 'POST',
   })
+
+export type ApprovalItem = {
+  id: string
+  draftId: string | null
+  requestedForUserId: string
+  status: string
+  requestedAt: string
+  completedAt: string | null
+  completedByUserId: string | null
+  draftBody: string | null
+  draftSubject: string | null
+  draftTo: string | null
+  conversationId: string | null
+}
+
+export type ReplyDraftResult = {
+  draftId: string
+  approvalId: string
+  conversationId: string
+  toAddress: string
+  subject: string
+  body: string
+  approvalStatus: string
+}
+
+export const listApprovals = () => api<ApprovalItem[]>('/approvals')
+
+export const approveRequest = (approvalId: string) =>
+  api<ReplyDraftResult>(`/approvals/${approvalId}/approve`, { method: 'POST' })
+
+export const rejectRequest = (approvalId: string) =>
+  api<ApprovalItem>(`/approvals/${approvalId}/reject`, { method: 'POST' })
+
+export const createReplyForApproval = (conversationId: string, body: string) =>
+  api<ReplyDraftResult>(`/conversations/${conversationId}/reply-for-approval`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })

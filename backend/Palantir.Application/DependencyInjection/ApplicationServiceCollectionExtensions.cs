@@ -1,8 +1,10 @@
-using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Palantir.Application.Approvals;
-using Palantir.Application.Connectors;
 using Palantir.Application.Conversations;
+using Palantir.Application.Outbound;
 using Palantir.Application.Tasks;
+using Palantir.Application.Connectors;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Palantir.Application.DependencyInjection;
 
@@ -14,6 +16,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<ITaskService, TaskService>();
         services.AddScoped<IOutlookInboxSyncService, OutlookInboxSyncService>();
+        services.AddScoped<IOutboundEmailService, OutboundEmailService>();
         return services;
     }
 }
