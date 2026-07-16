@@ -32,13 +32,14 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
         var mail = await _graph.ListMailAsync(connectedAccountId, userId, top, cancellationToken);
         var imported = 0;
         var skipped = 0;
+        var updated = 0;
         var conversationIds = new HashSet<Guid>();
 
-        var existingProviderIds = _db.Messages
+        var existingByProviderId = _db.Messages
             .Where(m => m.ProviderMessageId != null)
-            .Select(m => m.ProviderMessageId!)
             .ToList()
-            .ToHashSet(StringComparer.Ordinal);
+            .GroupBy(m => m.ProviderMessageId!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
         // Map Graph conversationId -> Palantir conversation for this sync pass + DB lookup
         var threadMap = new Dictionary<string, Guid>(StringComparer.Ordinal);
@@ -54,9 +55,32 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
 
         foreach (var item in mail.OrderBy(m => m.ReceivedAt ?? DateTimeOffset.MinValue))
         {
-            if (string.IsNullOrWhiteSpace(item.Id) || existingProviderIds.Contains(item.Id))
+            if (string.IsNullOrWhiteSpace(item.Id))
             {
                 skipped++;
+                continue;
+            }
+
+            var body = BuildBody(item);
+
+            if (existingByProviderId.TryGetValue(item.Id, out var existingMessage))
+            {
+                // Refresh truncated preview-only bodies with full Graph content.
+                if (!string.IsNullOrWhiteSpace(body) &&
+                    (string.IsNullOrWhiteSpace(existingMessage.Body) ||
+                     body.Length > existingMessage.Body.Length + 20))
+                {
+                    existingMessage.Body = body;
+                    existingMessage.Summary = item.Preview;
+                    await _db.SaveChangesAsync(cancellationToken);
+                    conversationIds.Add(existingMessage.ConversationId);
+                    updated++;
+                }
+                else
+                {
+                    skipped++;
+                }
+
                 continue;
             }
 
@@ -86,7 +110,7 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
             {
                 ConversationId = conversationId,
                 Direction = "Inbound",
-                Body = BuildBody(item),
+                Body = body,
                 Summary = item.Preview,
                 ProviderMessageId = item.Id,
                 ProviderMetadataJson = JsonSerializer.Serialize(new
@@ -96,7 +120,8 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
                     graphConversationId = item.GraphConversationId,
                     from = item.From,
                     isRead = item.IsRead,
-                    threadKey
+                    threadKey,
+                    bodySource = string.IsNullOrWhiteSpace(item.BodyText) ? "preview" : "full"
                 }),
                 CreatedAt = item.ReceivedAt ?? DateTimeOffset.UtcNow
             };
@@ -116,7 +141,7 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
             }
 
             await _db.SaveChangesAsync(cancellationToken);
-            existingProviderIds.Add(item.Id);
+            existingByProviderId[item.Id] = message;
             conversationIds.Add(conversationId);
             imported++;
         }
@@ -127,7 +152,7 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
             userId,
             nameof(ConnectedAccount),
             connectedAccountId,
-            JsonSerializer.Serialize(new { fetched = mail.Count, imported, skipped }),
+            JsonSerializer.Serialize(new { fetched = mail.Count, imported, skipped, updated }),
             cancellationToken);
 
         return new OutlookMailSyncResult(
@@ -141,8 +166,10 @@ public sealed class OutlookInboxSyncService : IOutlookInboxSyncService
     private static string BuildBody(OutlookMessageDto item)
     {
         var from = string.IsNullOrWhiteSpace(item.From) ? "unknown sender" : item.From;
-        var preview = item.Preview ?? string.Empty;
-        return $"From: {from}\n\n{preview}".Trim();
+        var content = !string.IsNullOrWhiteSpace(item.BodyText)
+            ? item.BodyText
+            : item.Preview ?? string.Empty;
+        return $"From: {from}\n\n{content}".Trim();
     }
 
     private static string? TryReadThreadKey(string? metadataJson)

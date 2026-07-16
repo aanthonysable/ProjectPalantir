@@ -249,7 +249,7 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
         var client = _httpClientFactory.CreateClient("microsoft-graph");
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"https://graph.microsoft.com/v1.0/me/messages?$top={Math.Clamp(top, 1, 50)}&$select=id,subject,from,bodyPreview,receivedDateTime,isRead,conversationId&$orderby=receivedDateTime desc");
+            $"https://graph.microsoft.com/v1.0/me/messages?$top={Math.Clamp(top, 1, 50)}&$select=id,subject,from,bodyPreview,body,receivedDateTime,isRead,conversationId&$orderby=receivedDateTime desc");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
         using var response = await client.SendAsync(request, cancellationToken);
@@ -276,7 +276,8 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
                 m.BodyPreview,
                 m.ReceivedDateTime,
                 m.IsRead ?? false,
-                m.ConversationId))
+                m.ConversationId,
+                NormalizeGraphBody(m.Body)))
             .ToList();
     }
 
@@ -612,9 +613,16 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
         public string? Subject { get; set; }
         public GraphFrom? From { get; set; }
         public string? BodyPreview { get; set; }
+        public GraphItemBody? Body { get; set; }
         public DateTimeOffset? ReceivedDateTime { get; set; }
         public bool? IsRead { get; set; }
         public string? ConversationId { get; set; }
+    }
+
+    private sealed class GraphItemBody
+    {
+        public string? ContentType { get; set; }
+        public string? Content { get; set; }
     }
 
     private sealed class GraphFrom
@@ -625,5 +633,37 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
     private sealed class GraphEmailAddress
     {
         public string? Address { get; set; }
+    }
+
+    private static string? NormalizeGraphBody(GraphItemBody? body)
+    {
+        if (body?.Content is null || string.IsNullOrWhiteSpace(body.Content))
+        {
+            return null;
+        }
+
+        if (string.Equals(body.ContentType, "text", StringComparison.OrdinalIgnoreCase))
+        {
+            return body.Content.Trim();
+        }
+
+        return HtmlToPlainText(body.Content);
+    }
+
+    private static string HtmlToPlainText(string html)
+    {
+        var text = System.Net.WebUtility.HtmlDecode(html);
+        text = System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"<(script|style)[^>]*>[\s\S]*?</\1>",
+            string.Empty,
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"<br\s*/?>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"</p\s*>", "\n\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"</div\s*>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", string.Empty);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"[ \t]+\n", "\n");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", "\n\n");
+        return text.Trim();
     }
 }
