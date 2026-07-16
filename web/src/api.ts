@@ -161,3 +161,16 @@ export const disconnectAccount = (connectedAccountId: string) =>
 
 export const listOutlookMail = (connectedAccountId: string, top = 15) =>
   api<OutlookMessage[]>(`/connected-accounts/${connectedAccountId}/mail?top=${top}`)
+
+export type OutlookSyncResult = {
+  connectedAccountId: string
+  fetched: number
+  imported: number
+  skipped: number
+  conversationIds: string[]
+}
+
+export const syncOutlookInbox = (connectedAccountId: string, top = 25) =>
+  api<OutlookSyncResult>(`/connected-accounts/${connectedAccountId}/sync?top=${top}`, {
+    method: 'POST',
+  })

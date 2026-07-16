@@ -21,7 +21,8 @@ public sealed record OutlookMessageDto(
     string? From,
     string? Preview,
     DateTimeOffset? ReceivedAt,
-    bool IsRead);
+    bool IsRead,
+    string? GraphConversationId = null);
 
 public interface IMicrosoftGraphConnectorService
 {

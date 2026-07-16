@@ -21,6 +21,7 @@ import {
   listOutlookMail,
   listTasks,
   releaseConversation,
+  syncOutlookInbox,
 } from './api'
 import './App.css'
 
@@ -74,7 +75,9 @@ export default function App() {
   const refreshAccounts = async () => {
     const items = await listConnectedAccounts()
     setAccounts(items)
-    const connected = items.find((a) => a.connectionStatus === 'Connected')
+    const connected = items.find(
+      (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+    )
     if (connected) {
       setOutlookMail(await listOutlookMail(connected.id))
     } else {
@@ -110,7 +113,8 @@ export default function App() {
       window.history.replaceState({}, '', '/')
     } else if (outlook === 'error') {
       setActive('Admin')
-      setError(params.get('message') || 'Outlook connection failed')
+      const raw = params.get('message') || 'Outlook connection failed'
+      setError(decodeURIComponent(raw.replace(/\+/g, ' ')))
       window.history.replaceState({}, '', '/')
     }
     void refresh()
@@ -229,6 +233,38 @@ export default function App() {
     }
   }
 
+  const onSyncOutlook = async () => {
+    const account = accounts.find(
+      (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+    )
+    if (!account) {
+      setError('Connect Outlook in Admin before syncing.')
+      setActive('Admin')
+      return
+    }
+
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await syncOutlookInbox(account.id)
+      setStatusBanner(
+        `Synced Outlook: ${result.imported} imported, ${result.skipped} already present (${result.fetched} fetched)`,
+      )
+      const inbox = await refreshInbox()
+      if (result.conversationIds[0]) {
+        setSelectedId(result.conversationIds[0])
+      } else if (inbox[0]) {
+        setSelectedId(inbox[0].id)
+      }
+      setActive('Inbox')
+      await refreshAccounts()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Outlook sync failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onDisconnect = async (accountId: string) => {
     setBusy(true)
     setError(null)
@@ -242,6 +278,10 @@ export default function App() {
       setBusy(false)
     }
   }
+
+  const connectedOutlook = accounts.find(
+    (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+  )
 
   const title =
     active === 'Inbox'
@@ -284,6 +324,11 @@ export default function App() {
           </div>
           <div className="meta">
             <span>{userLabel}</span>
+            <span className={connectedOutlook ? 'pill ok' : 'pill'}>
+              {connectedOutlook
+                ? `Outlook · ${connectedOutlook.primaryAddress ?? 'connected'}`
+                : 'Outlook · not connected'}
+            </span>
             <span className={health.startsWith('ok') ? 'pill ok' : 'pill'}>{health}</span>
           </div>
         </header>
@@ -294,17 +339,29 @@ export default function App() {
         {active === 'Inbox' && (
           <section className="inbox-layout">
             <div className="inbox-list">
-              <form className="composer" onSubmit={onCreate}>
-                <input
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  placeholder="Start a conversation subject…"
-                  aria-label="Conversation subject"
-                />
-                <button type="submit" disabled={busy}>
-                  {busy ? 'Creating…' : 'New'}
-                </button>
-              </form>
+              <div className="inbox-toolbar">
+                <form className="composer" onSubmit={onCreate}>
+                  <input
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    placeholder="Start a conversation subject…"
+                    aria-label="Conversation subject"
+                  />
+                  <button type="submit" disabled={busy}>
+                    {busy ? 'Creating…' : 'New'}
+                  </button>
+                </form>
+                {connectedOutlook && (
+                  <button
+                    type="button"
+                    className="sync-btn"
+                    onClick={() => void onSyncOutlook()}
+                    disabled={busy}
+                  >
+                    {busy ? 'Syncing…' : 'Sync Outlook'}
+                  </button>
+                )}
+              </div>
 
               <div className="list">
                 {conversations.length === 0 ? (
@@ -462,6 +519,13 @@ export default function App() {
                 <button type="button" onClick={() => void onConnectOutlook()} disabled={busy}>
                   {busy ? 'Redirecting…' : 'Connect Outlook'}
                 </button>
+                {accounts.some(
+                  (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+                ) && (
+                  <button type="button" className="ghost" onClick={() => void onSyncOutlook()} disabled={busy}>
+                    Sync into Inbox
+                  </button>
+                )}
               </div>
             </div>
 

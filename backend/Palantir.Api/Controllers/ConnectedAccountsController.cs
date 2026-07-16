@@ -9,15 +9,18 @@ namespace Palantir.Api.Controllers;
 public sealed class ConnectedAccountsController : ControllerBase
 {
     private readonly IMicrosoftGraphConnectorService _microsoft;
+    private readonly IOutlookInboxSyncService _outlookSync;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly MicrosoftGraphOptions _options;
 
     public ConnectedAccountsController(
         IMicrosoftGraphConnectorService microsoft,
+        IOutlookInboxSyncService outlookSync,
         ICurrentUserAccessor currentUser,
         IOptions<MicrosoftGraphOptions> options)
     {
         _microsoft = microsoft;
+        _outlookSync = outlookSync;
         _currentUser = currentUser;
         _options = options.Value;
     }
@@ -134,6 +137,33 @@ public sealed class ConnectedAccountsController : ControllerBase
                 top,
                 cancellationToken);
             return Ok(messages);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("connected-accounts/{connectedAccountId:guid}/sync")]
+    public async Task<ActionResult<OutlookMailSyncResult>> SyncInbox(
+        Guid connectedAccountId,
+        [FromQuery] int top = 25,
+        CancellationToken cancellationToken = default)
+    {
+        if (_currentUser.UserId is null || _currentUser.OrganizationId is null)
+        {
+            return BadRequest("X-Palantir-User-Id and X-Palantir-Organization-Id headers are required.");
+        }
+
+        try
+        {
+            var result = await _outlookSync.SyncAsync(
+                connectedAccountId,
+                _currentUser.UserId.Value,
+                _currentUser.OrganizationId.Value,
+                top,
+                cancellationToken);
+            return Ok(result);
         }
         catch (InvalidOperationException ex)
         {

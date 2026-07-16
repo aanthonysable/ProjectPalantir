@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Palantir.Application.Approvals;
+using Palantir.Application.Connectors;
 using Palantir.Application.Conversations;
 using Palantir.Application.Tasks;
 
@@ -12,6 +13,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<ITaskService, TaskService>();
+        services.AddScoped<IOutlookInboxSyncService, OutlookInboxSyncService>();
         return services;
     }
 }

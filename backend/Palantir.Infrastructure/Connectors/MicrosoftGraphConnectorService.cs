@@ -249,7 +249,7 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
         var client = _httpClientFactory.CreateClient("microsoft-graph");
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"https://graph.microsoft.com/v1.0/me/messages?$top={Math.Clamp(top, 1, 50)}&$select=id,subject,from,bodyPreview,receivedDateTime,isRead&$orderby=receivedDateTime desc");
+            $"https://graph.microsoft.com/v1.0/me/messages?$top={Math.Clamp(top, 1, 50)}&$select=id,subject,from,bodyPreview,receivedDateTime,isRead,conversationId&$orderby=receivedDateTime desc");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
         using var response = await client.SendAsync(request, cancellationToken);
@@ -275,7 +275,8 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
                 m.From?.EmailAddress?.Address,
                 m.BodyPreview,
                 m.ReceivedDateTime,
-                m.IsRead ?? false))
+                m.IsRead ?? false,
+                m.ConversationId))
             .ToList();
     }
 
@@ -417,6 +418,19 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
             throw new InvalidOperationException(
                 "Microsoft Graph connector is not configured. Set ClientId, ClientSecret, and RedirectUri.");
         }
+
+        // Azure portal shows Secret ID (a GUID) and Value (a longer random string).
+        // Using the ID produces AADSTS7000215 and the connection never saves.
+        if (_options.ClientSecret.Length == 36 &&
+            _options.ClientSecret.Count(c => c == '-') == 4 &&
+            Guid.TryParse(_options.ClientSecret, out _))
+        {
+            throw new InvalidOperationException(
+                "Connectors:MicrosoftGraph:ClientSecret looks like a Secret ID (GUID). " +
+                "In Azure → Certificates & secrets, copy the Value column (not Secret ID), then run: " +
+                "dotnet user-secrets set \"Connectors:MicrosoftGraph:ClientSecret\" \"<VALUE>\" " +
+                "and restart the API.");
+        }
     }
 
     private static void MapGraphFailure(ConnectedAccount account, string body)
@@ -534,6 +548,7 @@ public sealed class MicrosoftGraphConnectorService : IMicrosoftGraphConnectorSer
         public string? BodyPreview { get; set; }
         public DateTimeOffset? ReceivedDateTime { get; set; }
         public bool? IsRead { get; set; }
+        public string? ConversationId { get; set; }
     }
 
     private sealed class GraphFrom
