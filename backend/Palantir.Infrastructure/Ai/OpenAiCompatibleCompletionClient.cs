@@ -26,7 +26,31 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
         _apiKey = FirstNonEmpty(_options.ApiKey, Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
+    public bool IsConfigured
+    {
+        get
+        {
+            if (IsOllama)
+            {
+                return !string.IsNullOrWhiteSpace(_options.Model);
+            }
+
+            if (IsAzure)
+            {
+                return !string.IsNullOrWhiteSpace(_apiKey)
+                       && !string.IsNullOrWhiteSpace(_options.Endpoint)
+                       && !string.IsNullOrWhiteSpace(_options.Deployment);
+            }
+
+            return !string.IsNullOrWhiteSpace(_apiKey);
+        }
+    }
+
+    private bool IsOllama =>
+        string.Equals(_options.Provider, "Ollama", StringComparison.OrdinalIgnoreCase);
+
+    private bool IsAzure =>
+        string.Equals(_options.Provider, "AzureOpenAI", StringComparison.OrdinalIgnoreCase);
 
     public async Task<string> CompleteAsync(
         IReadOnlyList<AiChatMessage> messages,
@@ -34,7 +58,7 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
     {
         if (!IsConfigured)
         {
-            throw new InvalidOperationException("AI API key is not configured.");
+            throw new InvalidOperationException(NotConfiguredMessage());
         }
 
         var client = _httpClientFactory.CreateClient("palantir-ai");
@@ -45,7 +69,10 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogWarning("AI completion failed: {Status} {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException($"AI completion failed: {(int)response.StatusCode}");
+            throw new InvalidOperationException(
+                IsOllama
+                    ? $"Ollama request failed ({(int)response.StatusCode}). Is ollama running and was the model pulled?"
+                    : $"AI completion failed: {(int)response.StatusCode}");
         }
 
         using var doc = JsonDocument.Parse(body);
@@ -65,26 +92,32 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
 
     private HttpRequestMessage BuildRequest(IReadOnlyList<AiChatMessage> messages)
     {
-        var isAzure = string.Equals(_options.Provider, "AzureOpenAI", StringComparison.OrdinalIgnoreCase);
         string url;
-        if (isAzure)
-        {
-            if (string.IsNullOrWhiteSpace(_options.Endpoint) || string.IsNullOrWhiteSpace(_options.Deployment))
-            {
-                throw new InvalidOperationException("Azure OpenAI requires Ai:Endpoint and Ai:Deployment.");
-            }
+        string? model;
 
+        if (IsAzure)
+        {
             var endpoint = _options.Endpoint.TrimEnd('/');
             url = $"{endpoint}/openai/deployments/{_options.Deployment}/chat/completions?api-version={_options.ApiVersion}";
+            model = null;
+        }
+        else if (IsOllama)
+        {
+            var endpoint = string.IsNullOrWhiteSpace(_options.Endpoint)
+                ? "http://127.0.0.1:11434"
+                : _options.Endpoint.TrimEnd('/');
+            url = $"{endpoint}/v1/chat/completions";
+            model = _options.Model;
         }
         else
         {
             url = "https://api.openai.com/v1/chat/completions";
+            model = _options.Model;
         }
 
         var payload = new
         {
-            model = isAzure ? null : _options.Model,
+            model,
             messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature = 0.3
         };
@@ -100,16 +133,31 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
-        if (isAzure)
+        if (IsAzure)
         {
             request.Headers.Add("api-key", _apiKey);
         }
-        else
+        else if (!IsOllama && !string.IsNullOrWhiteSpace(_apiKey))
         {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        }
+        else if (IsOllama && !string.IsNullOrWhiteSpace(_apiKey))
+        {
+            // Optional; local Ollama usually ignores auth.
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         }
 
         return request;
+    }
+
+    private string NotConfiguredMessage()
+    {
+        if (IsOllama)
+        {
+            return "Ollama is not configured. Set Ai:Provider=Ollama, Ai:Model, start `ollama serve`, and pull the model.";
+        }
+
+        return "AI is not configured. Set Ai:ApiKey (user-secrets) or OPENAI_API_KEY, then restart the API.";
     }
 
     private static string FirstNonEmpty(params string?[] values) =>

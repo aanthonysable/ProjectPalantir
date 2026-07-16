@@ -163,7 +163,7 @@ public sealed class AiAssistantService : IAiAssistantService
         if (!_ai.IsConfigured)
         {
             throw new InvalidOperationException(
-                "AI is not configured. Set Ai:ApiKey (user-secrets) or OPENAI_API_KEY, then restart the API.");
+                "AI is not configured. For Ollama: start ollama, pull Ai:Model, and set Ai:Provider=Ollama. For OpenAI: set Ai:ApiKey.");
         }
     }
 

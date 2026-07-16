@@ -32,6 +32,8 @@ import {
   logout,
   rejectRequest,
   releaseConversation,
+  draftReplyWithAi,
+  summarizeConversation,
   syncOutlookInbox,
 } from './api'
 import './App.css'
@@ -272,6 +274,40 @@ export default function App() {
       await refreshApprovals()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onSummarize = async () => {
+    if (!selectedId) return
+    setBusy(true)
+    setError(null)
+    try {
+      await summarizeConversation(selectedId)
+      setStatusBanner('AI summary saved as an internal note (Ollama).')
+      await Promise.all([loadMessages(selectedId), refreshInbox()])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Summarize failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onAiDraft = async () => {
+    if (!selectedId) return
+    setBusy(true)
+    setError(null)
+    try {
+      const draft = await draftReplyWithAi(selectedId, messageBody.trim() || undefined)
+      setMessageBody('')
+      setStatusBanner(
+        `AI draft queued for approval → ${draft.toAddress}. Review in Approvals before send.`,
+      )
+      await refreshApprovals()
+      setActive('Approvals')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI draft failed')
     } finally {
       setBusy(false)
     }
@@ -595,6 +631,24 @@ export default function App() {
                       <p>{assigneeLabel(selected, currentUserId)}</p>
                     </div>
                     <div className="actions">
+                      <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
+                        Summarize
+                      </button>
+                      {selected.channel === 'Email' && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void onAiDraft()}
+                          disabled={busy || !canSendMail}
+                          title={
+                            canSendMail
+                              ? 'Draft with local Ollama, then approve before send'
+                              : 'Connect Outlook with Mail.Send first'
+                          }
+                        >
+                          AI draft
+                        </button>
+                      )}
                       {!selected.assignedUserId || selected.assignedUserId !== currentUserId ? (
                         <button type="button" onClick={onClaim} disabled={busy}>
                           Claim

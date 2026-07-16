@@ -4,14 +4,18 @@ public sealed class AiOptions
 {
     public const string SectionName = "Ai";
 
-    /// <summary>OpenAI or AzureOpenAI</summary>
-    public string Provider { get; set; } = "OpenAI";
+    /// <summary>OpenAI, AzureOpenAI, or Ollama</summary>
+    public string Provider { get; set; } = "Ollama";
 
     public string ApiKey { get; set; } = string.Empty;
-    public string Model { get; set; } = "gpt-4o-mini";
+    public string Model { get; set; } = "llama3.2";
 
-    /// <summary>Azure OpenAI resource endpoint, e.g. https://myresource.openai.azure.com/</summary>
-    public string Endpoint { get; set; } = string.Empty;
+    /// <summary>
+    /// Base URL for OpenAI-compatible APIs.
+    /// Ollama default: http://127.0.0.1:11434
+    /// Azure OpenAI: https://{resource}.openai.azure.com/
+    /// </summary>
+    public string Endpoint { get; set; } = "http://127.0.0.1:11434";
 
     /// <summary>Azure OpenAI deployment name</summary>
     public string Deployment { get; set; } = string.Empty;

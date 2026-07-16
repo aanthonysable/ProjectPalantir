@@ -42,7 +42,11 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddMemoryCache();
         services.AddHttpClient("microsoft-graph");
-        services.AddHttpClient("palantir-ai");
+        services.AddHttpClient("palantir-ai", client =>
+        {
+            // Local Ollama can be slow on first token / cold start.
+            client.Timeout = TimeSpan.FromMinutes(5);
+        });
         services.AddScoped<IPalantirDbContext>(sp => sp.GetRequiredService<PalantirDbContext>());
         services.AddScoped<IAuditEventWriter, AuditEventWriter>();
         services.AddSingleton<IConnectorCredentialStore, DataProtectionCredentialStore>();

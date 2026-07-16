@@ -69,7 +69,9 @@ Demo pilot user (local): `demo@palantir.local` (password rotated for shared envs
 | Pilot JWT signing key | `Authentication:PilotJwt:SigningKey` (config / user-secrets) | Dev default; replace for shared hosts; 12h lifetime |
 | Graph client secret | `dotnet user-secrets` `Connectors:MicrosoftGraph:ClientSecret` | Not in git |
 | Graph access/refresh | Data Protection protected store via `OAuthGrant` | Revoked on disconnect |
-| OpenAI / AI | Deferred | Not required for mail pilot |
+| AI (pilot) | **Ollama local** (`Ai:Provider=Ollama`, no cloud key) | Swap to OpenAI/Azure later via config |
+
+AI drafts remain approval-gated before any external send.
 
 ## 6. Approval & send controls
 
