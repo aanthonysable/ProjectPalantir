@@ -84,10 +84,22 @@ export default function App() {
   const [outlookMail, setOutlookMail] = useState<OutlookMessage[]>([])
   const [approvals, setApprovals] = useState<ApprovalItem[]>([])
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
+  const [threadSortNewestFirst, setThreadSortNewestFirst] = useState(() => {
+    const stored = localStorage.getItem('palantir.threadSort')
+    return stored !== 'oldest'
+  })
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
   const currentUserId = session?.userId ?? null
+  const sortedMessages = [...messages].sort((a, b) => {
+    const delta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    return threadSortNewestFirst ? -delta : delta
+  })
 
+  const setThreadSort = (newestFirst: boolean) => {
+    setThreadSortNewestFirst(newestFirst)
+    localStorage.setItem('palantir.threadSort', newestFirst ? 'newest' : 'oldest')
+  }
   const refreshInbox = async () => {
     const inbox = await listConversations()
     setConversations(inbox)
@@ -742,6 +754,14 @@ export default function App() {
                       <p>{assigneeLabel(selected, currentUserId)}</p>
                     </div>
                     <div className="actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setThreadSort(!threadSortNewestFirst)}
+                        title="Toggle message order"
+                      >
+                        {threadSortNewestFirst ? 'Newest first' : 'Oldest first'}
+                      </button>
                       <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
                         Summarize
                       </button>
@@ -773,10 +793,10 @@ export default function App() {
                   </div>
 
                   <div className="timeline">
-                    {messages.length === 0 ? (
+                    {sortedMessages.length === 0 ? (
                       <p className="muted">No messages yet.</p>
                     ) : (
-                      messages.map((msg) => (
+                      sortedMessages.map((msg) => (
                         <article
                           key={msg.id}
                           className={msg.isInternalNote ? 'bubble note' : 'bubble'}
