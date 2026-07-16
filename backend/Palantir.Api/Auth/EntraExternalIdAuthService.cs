@@ -60,7 +60,10 @@ public sealed class EntraExternalIdAuthService : IEntraExternalIdAuthService
                     _entra.ClientId,
                     _entra.Audience,
                     _entra.TenantId,
-                    _entra.Scopes)
+                    _entra.Scopes
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray())
                 : null);
 
     public async Task<PilotLoginResult> ExchangeAsync(
