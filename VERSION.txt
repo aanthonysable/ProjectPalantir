@@ -1,0 +1,4 @@
+Project Palantir Design Package
+Version: 0.2
+Date: 2026-07-16
+Primary update: Standalone pilot identity, delegated Outlook OAuth, and future corporate Entra linking.

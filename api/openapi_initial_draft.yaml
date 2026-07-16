@@ -1,0 +1,146 @@
+openapi: 3.0.3
+info:
+  title: Project Palantir API
+  version: 0.1.0
+  description: Initial API draft for Project Palantir.
+servers:
+  - url: https://api.palantir.internal.sableautomation.com
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }
+  /me:
+    get:
+      summary: Current user profile
+      responses:
+        '200': { description: Current user }
+  /organizations/{organizationId}/conversations:
+    get:
+      summary: List conversations
+      parameters:
+        - in: path
+          name: organizationId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: assignedToMe
+          schema: { type: boolean }
+      responses:
+        '200': { description: Conversation list }
+    post:
+      summary: Create conversation
+      responses:
+        '201': { description: Created }
+  /conversations/{conversationId}:
+    get:
+      summary: Get conversation detail
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Conversation detail }
+  /conversations/{conversationId}/messages:
+    post:
+      summary: Add message or internal note
+      responses:
+        '201': { description: Created }
+  /drafts:
+    post:
+      summary: Create draft message
+      responses:
+        '201': { description: Created }
+  /approvals:
+    get:
+      summary: List approvals for current user
+      responses:
+        '200': { description: Approval list }
+    post:
+      summary: Create approval request
+      responses:
+        '201': { description: Created }
+  /approvals/{approvalId}/approve:
+    post:
+      summary: Approve a request
+      responses:
+        '200': { description: Approved }
+  /approvals/{approvalId}/reject:
+    post:
+      summary: Reject a request
+      responses:
+        '200': { description: Rejected }
+  /tasks:
+    get:
+      summary: List tasks
+      responses:
+        '200': { description: Task list }
+    post:
+      summary: Create task or reminder
+      responses:
+        '201': { description: Created }
+  /connectors/register:
+    post:
+      summary: Register connector and capabilities
+      responses:
+        '201': { description: Registered }
+  /connectors/{connectorId}/heartbeat:
+    post:
+      summary: Connector heartbeat
+      responses:
+        '200': { description: OK }
+  /actions/{actionId}/claim:
+    post:
+      summary: Claim an executable action
+      responses:
+        '200': { description: Claimed }
+  /actions/{actionId}/complete:
+    post:
+      summary: Complete an action
+      responses:
+        '200': { description: Completed }
+  /assistant/chat:
+    post:
+      summary: Ask the assistant
+      responses:
+        '200': { description: Assistant response }
+  /identity/external/link:
+    post:
+      summary: Link an external login identity to the authenticated Palantir user
+      responses:
+        '202': { description: Linking flow started }
+  /connected-accounts/microsoft/authorize:
+    post:
+      summary: Start delegated Microsoft Graph OAuth for an Outlook mailbox
+      responses:
+        '200': { description: Authorization URL and correlation state }
+  /connected-accounts/{connectedAccountId}:
+    get:
+      summary: Get connection status and granted capabilities
+      parameters:
+        - in: path
+          name: connectedAccountId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Connected account details }
+    delete:
+      summary: Disconnect and revoke a connected external account
+      parameters:
+        - in: path
+          name: connectedAccountId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Disconnected }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security:
+  - bearerAuth: []

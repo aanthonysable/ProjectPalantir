@@ -1,0 +1,16 @@
+stateDiagram-v2
+    [*] --> DraftCreated
+    DraftCreated --> ApprovalRequested
+    ApprovalRequested --> Approved
+    ApprovalRequested --> Rejected
+    ApprovalRequested --> Expired
+    Approved --> ActionCreated
+    ActionCreated --> Claimed
+    Claimed --> Sending
+    Sending --> Sent
+    Sending --> Failed
+    Failed --> Retried
+    Retried --> Claimed
+    Sent --> [*]
+    Rejected --> [*]
+    Expired --> [*]

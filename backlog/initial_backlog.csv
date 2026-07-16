@@ -1,0 +1,37 @@
+Epic,Feature,Task,Priority,Phase
+Foundation,Azure,Create Azure resource group,High,1
+Foundation,Azure,Provision Azure SQL,High,1
+Foundation,Azure,Provision App Service or Container Apps,High,1
+Foundation,Azure,Provision SignalR Service,High,1
+Foundation,Azure,Provision Blob Storage,High,1
+Foundation,Security,Configure Key Vault,High,1
+Foundation,Observability,Configure Application Insights,High,1
+Identity,Authentication,Implement Entra ID login,High,1
+Identity,Users,Create organization/user/team tables,High,1
+Identity,Devices,Implement device registration,Medium,1
+Communications,Conversations,Create conversation API,High,2
+Communications,Messages,Create message API,High,2
+Communications,Assignments,Implement claim/assign/escalate,High,2
+Workflow,Approvals,Create approval request API,High,2
+Workflow,Tasks,Create task/reminder API,High,2
+AI,Summarization,Implement conversation summary prompt,High,4
+AI,Drafting,Implement draft reply generation,High,4
+AI,Guardrails,Require approval before external sends,High,4
+Connectors,MicrosoftGraph,Implement Outlook read mail proof of concept,High,3
+Connectors,MicrosoftGraph,Implement send email with approval,High,3
+Connectors,Calendar,Read calendar availability,Medium,3
+Connectors,Teams,Send Teams notification,Medium,3
+UI,Web,Create shell and navigation,High,1
+UI,Web,Build unified inbox,High,2
+UI,Web,Build conversation view,High,2
+UI,Web,Build approval queue,High,2
+UI,Web,Build task/reminder view,Medium,2
+Leadership,Dashboard,Create unresolved customer communication dashboard,Medium,3
+Mobile,iOS,Build approval notification prototype,Medium,6
+Mobile,Android,Build approval notification prototype,Medium,6
+Voice,TeamsPhone,Evaluate Teams Phone SMS/voice capabilities,High,5
+Voice,Routing,Design central number routing rules,High,5
+Knowledge,Documents,Index approved documents,Medium,4
+Knowledge,RAG,Permission-aware retrieval prototype,High,4
+Admin,Policies,Build approval policy management,Medium,7
+Admin,Audit,Build audit event viewer,High,2

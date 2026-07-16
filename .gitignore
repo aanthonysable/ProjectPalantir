@@ -1,0 +1,47 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Office temp lock files
+~$*
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+appsettings.*.local.json
+secrets.json
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.nupkg
+TestResults/
+*.DotSettings.user
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Azure / local tooling
+.azure/
+local.settings.json
+
+# Logs
+*.log
+logs/

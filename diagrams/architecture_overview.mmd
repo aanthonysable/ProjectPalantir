@@ -1,0 +1,21 @@
+flowchart TB
+    Users[Employees on Web / Windows / Mac / iOS / Android]
+    API[Palantir Core API]
+    SignalR[Azure SignalR]
+    SQL[(Azure SQL)]
+    Blob[(Blob Storage)]
+    KeyVault[Key Vault]
+    AI[Azure OpenAI / AI Models]
+    Graph[Microsoft Graph Connector]
+    Phone[Teams Phone Connector]
+    Device[Device Connectors]
+
+    Users --> API
+    API --> SignalR
+    API --> SQL
+    API --> Blob
+    API --> KeyVault
+    API --> AI
+    API --> Graph
+    API --> Phone
+    API --> Device
