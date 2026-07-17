@@ -10,6 +10,9 @@ export default defineConfig({
         target: 'http://localhost:5251',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+        // Large knowledge uploads (multi-GB PLC / zip)
+        timeout: 0,
+        proxyTimeout: 0,
       },
       '/hubs': {
         target: 'http://localhost:5251',

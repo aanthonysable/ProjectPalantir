@@ -15,7 +15,12 @@ public interface IPalantirDbContext
     IQueryable<TaskItem> TaskItems { get; }
     IQueryable<ConnectedAccount> ConnectedAccounts { get; }
     IQueryable<OAuthGrant> OAuthGrants { get; }
+    IQueryable<KnowledgeDocument> KnowledgeDocuments { get; }
+    IQueryable<KnowledgeChunk> KnowledgeChunks { get; }
+    IQueryable<AskSession> AskSessions { get; }
+    IQueryable<AskMessage> AskMessages { get; }
 
     void Add<TEntity>(TEntity entity) where TEntity : class;
+    void Remove<TEntity>(TEntity entity) where TEntity : class;
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

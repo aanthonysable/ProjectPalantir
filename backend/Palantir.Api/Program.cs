@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -13,6 +15,22 @@ using Palantir.Infrastructure.DependencyInjection;
 using Palantir.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Knowledge uploads can be multi-GB PLC programs / archives.
+const long maxUploadBytes = 4L * 1024 * 1024 * 1024;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = maxUploadBytes;
+});
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = maxUploadBytes;
+    options.MemoryBufferThreshold = 1024 * 1024; // spill to disk after 1 MB
+});
+builder.Services.Configure<KestrelServerOptions>(options =>
+{
+    options.Limits.MaxRequestBodySize = maxUploadBytes;
+});
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>

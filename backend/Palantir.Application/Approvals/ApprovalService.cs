@@ -108,6 +108,7 @@ public sealed class ApprovalService : IApprovalService
     {
         string? subject = null;
         string? to = null;
+        string? kind = null;
         if (draft?.MetadataJson is not null)
         {
             try
@@ -121,6 +122,11 @@ public sealed class ApprovalService : IApprovalService
                 if (doc.RootElement.TryGetProperty("to", out var t))
                 {
                     to = t.GetString();
+                }
+
+                if (doc.RootElement.TryGetProperty("kind", out var k))
+                {
+                    kind = k.GetString();
                 }
             }
             catch
@@ -140,6 +146,7 @@ public sealed class ApprovalService : IApprovalService
             draft?.Body,
             subject,
             to,
-            draft?.ConversationId);
+            draft?.ConversationId,
+            kind);
     }
 }

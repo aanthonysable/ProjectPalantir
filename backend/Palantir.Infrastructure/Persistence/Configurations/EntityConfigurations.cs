@@ -119,7 +119,7 @@ public sealed class ProjectConfiguration : IEntityTypeConfiguration<Project>
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Name).HasMaxLength(300).IsRequired();
         builder.Property(x => x.Status).HasMaxLength(50).IsRequired();
-        builder.HasOne(x => x.OwnerUser).WithMany().HasForeignKey(x => x.OwnerUserId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne(x => x.OwnerUser).WithMany().HasForeignKey(x => x.OwnerUserId).OnDelete(DeleteBehavior.NoAction);
     }
 }
 
@@ -132,8 +132,8 @@ public sealed class ConversationConfiguration : IEntityTypeConfiguration<Convers
         builder.Property(x => x.Subject).HasMaxLength(500);
         builder.Property(x => x.Channel).HasMaxLength(50).IsRequired();
         builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(50);
-        builder.HasOne(x => x.AssignedUser).WithMany().HasForeignKey(x => x.AssignedUserId).OnDelete(DeleteBehavior.SetNull);
-        builder.HasOne(x => x.AssignedTeam).WithMany().HasForeignKey(x => x.AssignedTeamId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne(x => x.AssignedUser).WithMany().HasForeignKey(x => x.AssignedUserId).OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne(x => x.AssignedTeam).WithMany().HasForeignKey(x => x.AssignedTeamId).OnDelete(DeleteBehavior.NoAction);
     }
 }
 
@@ -221,7 +221,7 @@ public sealed class AuditEventConfiguration : IEntityTypeConfiguration<AuditEven
         builder.HasKey(x => x.Id);
         builder.Property(x => x.EventType).HasMaxLength(100).IsRequired();
         builder.Property(x => x.EntityType).HasMaxLength(100);
-        builder.HasOne(x => x.ActorUser).WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne(x => x.ActorUser).WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.NoAction);
     }
 }
 
@@ -233,6 +233,68 @@ public sealed class LocalPilotCredentialConfiguration : IEntityTypeConfiguration
         builder.HasKey(x => x.UserId);
         builder.Property(x => x.PasswordHash).IsRequired();
         builder.HasOne(x => x.User).WithOne().HasForeignKey<LocalPilotCredential>(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class KnowledgeDocumentConfiguration : IEntityTypeConfiguration<KnowledgeDocument>
+{
+    public void Configure(EntityTypeBuilder<KnowledgeDocument> builder)
+    {
+        builder.ToTable("KnowledgeDocuments");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Title).HasMaxLength(300).IsRequired();
+        builder.Property(x => x.FileName).HasMaxLength(260).IsRequired();
+        builder.Property(x => x.ContentType).HasMaxLength(120).IsRequired();
+        builder.Property(x => x.BlobPath).HasMaxLength(500).IsRequired();
+        builder.Property(x => x.Status).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.IndexError).HasMaxLength(500);
+        builder.HasIndex(x => new { x.OrganizationId, x.CreatedAt });
+        builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(x => x.UploadedByUser).WithMany().HasForeignKey(x => x.UploadedByUserId)
+            .OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+public sealed class KnowledgeChunkConfiguration : IEntityTypeConfiguration<KnowledgeChunk>
+{
+    public void Configure(EntityTypeBuilder<KnowledgeChunk> builder)
+    {
+        builder.ToTable("KnowledgeChunks");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Text).IsRequired();
+        builder.HasIndex(x => new { x.DocumentId, x.Ordinal }).IsUnique();
+        builder.HasOne(x => x.Document).WithMany(x => x.Chunks).HasForeignKey(x => x.DocumentId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class AskSessionConfiguration : IEntityTypeConfiguration<AskSession>
+{
+    public void Configure(EntityTypeBuilder<AskSession> builder)
+    {
+        builder.ToTable("AskSessions");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Title).HasMaxLength(200).IsRequired();
+        builder.HasIndex(x => new { x.OrganizationId, x.UserId, x.UpdatedAt });
+        builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+public sealed class AskMessageConfiguration : IEntityTypeConfiguration<AskMessage>
+{
+    public void Configure(EntityTypeBuilder<AskMessage> builder)
+    {
+        builder.ToTable("AskMessages");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Role).HasMaxLength(20).IsRequired();
+        builder.Property(x => x.Content).IsRequired();
+        builder.HasIndex(x => new { x.SessionId, x.Ordinal }).IsUnique();
+        builder.HasOne(x => x.Session).WithMany(x => x.Messages).HasForeignKey(x => x.SessionId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

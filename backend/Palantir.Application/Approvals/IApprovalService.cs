@@ -13,7 +13,8 @@ public sealed record ApprovalDto(
     string? DraftBody = null,
     string? DraftSubject = null,
     string? DraftTo = null,
-    Guid? ConversationId = null);
+    Guid? ConversationId = null,
+    string? DraftKind = null);
 
 public sealed record CreateApprovalRequest(
     Guid OrganizationId,

@@ -46,7 +46,7 @@ Deliverables:
 - Summaries.
 - Draft replies.
 - Approval workflow.
-- Knowledge retrieval.
+- Knowledge retrieval (MVP: Admin upload → Azure Blob `knowledge` + SQL chunks; Overview recap/Ask retrieve excerpts).
 - User writing preferences.
 - Project/customer context.
 
@@ -102,3 +102,14 @@ Deliverables:
 - Map approved corporate groups to Palantir roles where desired.
 - Link existing pilot users rather than creating replacements.
 - Move selected users from test mailboxes to corporate Outlook connections.
+
+## Parallel track - Ops systems intelligence (started 2026-07-17)
+
+Branch from the communications plan to unify operational work tools. Detail: `docs/13_ops_systems_integrations.md`, ADR 0005.
+
+- MaintainX connector — **two environments** (separate credentials).
+- EZRentOut connector — assets / rentals.
+- Monday.com connector — **Sable Operations workspace only** (other workspaces deprecated).
+- MaintainX status semantics: OPEN / IN_PROGRESS = physical work; ON_HOLD = physically finished (back office close-out); DONE = billed/closed.
+- Unified open-work view + AI insights across sources.
+- Future: limited accounting reads via SAP **or** Syteline (`IAccountingConnector`).

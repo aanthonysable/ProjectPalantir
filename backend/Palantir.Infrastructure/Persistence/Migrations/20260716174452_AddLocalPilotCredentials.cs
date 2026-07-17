@@ -15,9 +15,9 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "LocalPilotCredentials",
                 columns: table => new
                 {
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    PasswordHash = table.Column<string>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    UserId = table.Column<Guid>(nullable: false),
+                    PasswordHash = table.Column<string>(nullable: false),
+                    UpdatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {

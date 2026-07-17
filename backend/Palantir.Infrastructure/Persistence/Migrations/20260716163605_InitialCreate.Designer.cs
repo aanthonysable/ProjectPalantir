@@ -23,34 +23,25 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.ApprovalRequest", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("CompletedAt");
 
-                    b.Property<Guid?>("CompletedByUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("CompletedByUserId");
 
-                    b.Property<Guid?>("DraftId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("DraftId");
 
-                    b.Property<int?>("DraftRevision")
-                        .HasColumnType("INTEGER");
+                    b.Property<int?>("DraftRevision");
 
-                    b.Property<DateTimeOffset?>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("ExpiresAt");
 
-                    b.Property<DateTimeOffset>("RequestedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("RequestedAt");
 
-                    b.Property<Guid>("RequestedForUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("RequestedForUserId");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.HasKey("Id");
 
@@ -66,32 +57,24 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.AuditEvent", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid?>("ActorUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ActorUserId");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
-                    b.Property<string>("DetailsJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("DetailsJson");
 
-                    b.Property<Guid?>("EntityId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("EntityId");
 
                     b.Property<string>("EntityType")
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(100);
 
                     b.Property<string>("EventType")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(100);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.HasKey("Id");
 
@@ -105,47 +88,35 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.ConnectedAccount", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("ConnectionStatus")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(64);
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
-                    b.Property<string>("DisplayName")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("DisplayName");
 
-                    b.Property<string>("GrantedScopesJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("GrantedScopesJson");
 
-                    b.Property<DateTimeOffset?>("LastSuccessfulSyncAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("LastSuccessfulSyncAt");
 
-                    b.Property<string>("PrimaryAddress")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("PrimaryAddress");
 
                     b.Property<string>("Provider")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(64);
 
                     b.Property<string>("ProviderAccountId")
                         .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(256);
 
-                    b.Property<string>("ProviderTenantId")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("ProviderTenantId");
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("UpdatedAt");
 
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("UserId");
 
                     b.HasKey("Id");
 
@@ -157,39 +128,30 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Connector", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("CapabilitiesJson")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                        .IsRequired();
 
                     b.Property<string>("ConnectorType")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(100);
 
-                    b.Property<Guid?>("DeviceId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("DeviceId");
 
-                    b.Property<DateTimeOffset?>("LastHeartbeatAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("LastHeartbeatAt");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
-                    b.Property<Guid?>("UserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("UserId");
 
                     b.HasKey("Id");
 
@@ -201,30 +163,23 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Contact", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid?>("CustomerId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("CustomerId");
 
                     b.Property<string>("DisplayName")
                         .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(300);
 
                     b.Property<string>("Email")
-                        .HasMaxLength(320)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(320);
 
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("MetadataJson");
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.Property<string>("Phone")
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.HasKey("Id");
 
@@ -236,43 +191,32 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Conversation", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid?>("AssignedTeamId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("AssignedTeamId");
 
-                    b.Property<Guid?>("AssignedUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("AssignedUserId");
 
                     b.Property<string>("Channel")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
-                    b.Property<Guid?>("CustomerId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("CustomerId");
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
-                    b.Property<Guid?>("ProjectId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ProjectId");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.Property<string>("Subject")
-                        .HasMaxLength(500)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(500);
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("UpdatedAt");
 
                     b.HasKey("Id");
 
@@ -292,19 +236,15 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Customer", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("MetadataJson");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(300);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.HasKey("Id");
 
@@ -316,30 +256,23 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Device", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("DeviceName")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("INTEGER");
+                    b.Property<bool>("IsActive");
 
-                    b.Property<DateTimeOffset?>("LastSeenAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("LastSeenAt");
 
                     b.Property<string>("Platform")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
-                    b.Property<string>("PushToken")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("PushToken");
 
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("UserId");
 
                     b.HasKey("Id");
 
@@ -351,35 +284,26 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Draft", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("Body")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                        .IsRequired();
 
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("ConversationId");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
-                    b.Property<bool>("CreatedByAi")
-                        .HasColumnType("INTEGER");
+                    b.Property<bool>("CreatedByAi");
 
-                    b.Property<Guid?>("CreatedByUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("CreatedByUserId");
 
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("MetadataJson");
 
-                    b.Property<int>("Revision")
-                        .HasColumnType("INTEGER");
+                    b.Property<int>("Revision");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.HasKey("Id");
 
@@ -393,43 +317,33 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.ExternalIdentity", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("Email")
-                        .HasMaxLength(320)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(320);
 
-                    b.Property<bool>("IsLoginEnabled")
-                        .HasColumnType("INTEGER");
+                    b.Property<bool>("IsLoginEnabled");
 
                     b.Property<string>("Issuer")
                         .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(512);
 
-                    b.Property<DateTimeOffset?>("LastVerifiedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("LastVerifiedAt");
 
-                    b.Property<DateTimeOffset>("LinkedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("LinkedAt");
 
                     b.Property<string>("Provider")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(64);
 
                     b.Property<string>("ProviderSubjectId")
                         .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(256);
 
                     b.Property<string>("ProviderTenantId")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(128);
 
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("UserId");
 
                     b.HasKey("Id");
 
@@ -444,41 +358,30 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Message", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<string>("Body")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("Body");
 
-                    b.Property<Guid?>("ContactId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ContactId");
 
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("ConversationId");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
                     b.Property<string>("Direction")
                         .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(20);
 
-                    b.Property<bool>("IsInternalNote")
-                        .HasColumnType("INTEGER");
+                    b.Property<bool>("IsInternalNote");
 
                     b.Property<string>("ProviderMessageId")
-                        .HasMaxLength(300)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(300);
 
-                    b.Property<string>("ProviderMetadataJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("ProviderMetadataJson");
 
-                    b.Property<Guid?>("SenderUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("SenderUserId");
 
-                    b.Property<string>("Summary")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("Summary");
 
                     b.HasKey("Id");
 
@@ -494,31 +397,23 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.OAuthGrant", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid>("ConnectedAccountId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("ConnectedAccountId");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(512);
 
-                    b.Property<DateTimeOffset?>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("ExpiresAt");
 
-                    b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("RevokedAt");
 
-                    b.Property<int>("TokenVersion")
-                        .HasColumnType("INTEGER");
+                    b.Property<int>("TokenVersion");
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("UpdatedAt");
 
                     b.HasKey("Id");
 
@@ -530,16 +425,13 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Organization", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
                     b.HasKey("Id");
 
@@ -549,30 +441,23 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Project", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid?>("CustomerId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("CustomerId");
 
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("MetadataJson");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(300);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
-                    b.Property<Guid?>("OwnerUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("OwnerUserId");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.HasKey("Id");
 
@@ -588,50 +473,37 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.TaskItem", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<Guid?>("AssignedToTeamId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("AssignedToTeamId");
 
-                    b.Property<Guid?>("AssignedToUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("AssignedToUserId");
 
-                    b.Property<Guid?>("ConversationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ConversationId");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("CreatedByUserId");
 
-                    b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("Description");
 
-                    b.Property<DateTimeOffset?>("DueAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("DueAt");
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.Property<string>("Priority")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
-                    b.Property<Guid?>("ProjectId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ProjectId");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(500);
 
                     b.HasKey("Id");
 
@@ -643,16 +515,13 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.Team", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.HasKey("Id");
 
@@ -664,27 +533,21 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
                     b.Property<string>("DisplayName")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
                     b.Property<string>("Email")
                         .IsRequired()
-                        .HasMaxLength(320)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(320);
 
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("INTEGER");
+                    b.Property<bool>("IsActive");
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.HasKey("Id");
 
@@ -696,51 +559,38 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.WorkflowAction", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd();
 
                     b.Property<string>("ActionType")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(100);
 
-                    b.Property<Guid?>("ApprovalRequestId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ApprovalRequestId");
 
-                    b.Property<Guid?>("ClaimedByConnectorId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("ClaimedByConnectorId");
 
-                    b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("CompletedAt");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset>("CreatedAt");
 
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(200);
 
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid>("OrganizationId");
 
                     b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                        .IsRequired();
 
-                    b.Property<Guid?>("RequestedByUserId")
-                        .HasColumnType("TEXT");
+                    b.Property<Guid?>("RequestedByUserId");
 
-                    b.Property<string>("ResultJson")
-                        .HasColumnType("TEXT");
+                    b.Property<string>("ResultJson");
 
-                    b.Property<DateTimeOffset?>("StartedAt")
-                        .HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("StartedAt");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasMaxLength(50);
 
                     b.HasKey("Id");
 

@@ -29,6 +29,10 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     public DbSet<Connector> Connectors => Set<Connector>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<LocalPilotCredential> LocalPilotCredentials => Set<LocalPilotCredential>();
+    public DbSet<KnowledgeDocument> KnowledgeDocuments => Set<KnowledgeDocument>();
+    public DbSet<KnowledgeChunk> KnowledgeChunks => Set<KnowledgeChunk>();
+    public DbSet<AskSession> AskSessions => Set<AskSession>();
+    public DbSet<AskMessage> AskMessages => Set<AskMessage>();
 
     IQueryable<Organization> IPalantirDbContext.Organizations => Organizations;
     IQueryable<User> IPalantirDbContext.Users => Users;
@@ -41,8 +45,13 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     IQueryable<TaskItem> IPalantirDbContext.TaskItems => TaskItems;
     IQueryable<ConnectedAccount> IPalantirDbContext.ConnectedAccounts => ConnectedAccounts;
     IQueryable<OAuthGrant> IPalantirDbContext.OAuthGrants => OAuthGrants;
+    IQueryable<KnowledgeDocument> IPalantirDbContext.KnowledgeDocuments => KnowledgeDocuments;
+    IQueryable<KnowledgeChunk> IPalantirDbContext.KnowledgeChunks => KnowledgeChunks;
+    IQueryable<AskSession> IPalantirDbContext.AskSessions => AskSessions;
+    IQueryable<AskMessage> IPalantirDbContext.AskMessages => AskMessages;
 
     public new void Add<TEntity>(TEntity entity) where TEntity : class => base.Add(entity);
+    public new void Remove<TEntity>(TEntity entity) where TEntity : class => base.Remove(entity);
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

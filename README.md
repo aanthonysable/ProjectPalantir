@@ -26,12 +26,16 @@ Project Palantir is an internal codename for an AI-powered collaboration and com
 3. Use `cursor/CURSOR_KICKOFF_PROMPT.md` when starting implementation work in Cursor.
 4. Use the backlog to begin planning MVP implementation.
 5. Run the Phase 1 foundation locally — see `backend/README.md`.
+6. Ops systems track (MaintainX ×2, EZRentOut, Monday.com): `docs/13_ops_systems_integrations.md`.
 
 **Repository:** https://github.com/aanthonysable/ProjectPalantir
 
 ## Local quick start
 
 ```bash
+# First time on a machine (or after switching laptops)
+./scripts/check-deps.sh --install   # see DEPENDENCIES.md
+
 # API (SQLite by default — Azure SQL not required yet)
 export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
@@ -43,6 +47,7 @@ cd web && npm install && npm run dev
 
 - API / Swagger: http://localhost:5251/swagger
 - Web shell: http://localhost:5173
+- Resume next-session tasks: `RESUME_TODO.md`
 
 
 ## Naming note

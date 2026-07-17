@@ -3,6 +3,8 @@ using Palantir.Application.Abstractions;
 using Palantir.Application.Approvals;
 using Palantir.Application.Audit;
 using Palantir.Application.Connectors;
+using Palantir.Application.Knowledge;
+using Palantir.Application.Ops;
 using Palantir.Domain.Entities;
 using Palantir.Domain.Enums;
 
@@ -13,17 +15,23 @@ public sealed class OutboundEmailService : IOutboundEmailService
     private readonly IPalantirDbContext _db;
     private readonly IApprovalService _approvals;
     private readonly IMicrosoftGraphConnectorService _graph;
+    private readonly IOpsWriteBackService _opsWriteBack;
+    private readonly IKnowledgeCaptureService _knowledgeCapture;
     private readonly IAuditEventWriter _audit;
 
     public OutboundEmailService(
         IPalantirDbContext db,
         IApprovalService approvals,
         IMicrosoftGraphConnectorService graph,
+        IOpsWriteBackService opsWriteBack,
+        IKnowledgeCaptureService knowledgeCapture,
         IAuditEventWriter audit)
     {
         _db = db;
         _approvals = approvals;
         _graph = graph;
+        _opsWriteBack = opsWriteBack;
+        _knowledgeCapture = knowledgeCapture;
         _audit = audit;
     }
 
@@ -127,7 +135,22 @@ public sealed class OutboundEmailService : IOutboundEmailService
         var meta = ParseDraftMeta(draft.MetadataJson);
         if (!string.Equals(meta.Kind, "outlook.reply", StringComparison.OrdinalIgnoreCase))
         {
-            // Non-email approvals: just approve.
+            var opsResult = await _opsWriteBack.TryExecuteApprovedAsync(approvalId, userId, cancellationToken);
+            if (opsResult is not null)
+            {
+                return opsResult;
+            }
+
+            var knowledgeResult = await _knowledgeCapture.TryExecuteApprovedAsync(
+                approvalId,
+                userId,
+                cancellationToken);
+            if (knowledgeResult is not null)
+            {
+                return knowledgeResult;
+            }
+
+            // Unknown non-email approvals: just approve.
             var plain = await _approvals.ApproveAsync(approvalId, userId, cancellationToken);
             return new ReplyDraftResult(
                 draft.Id,

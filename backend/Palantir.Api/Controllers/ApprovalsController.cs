@@ -79,7 +79,7 @@ public sealed class ApprovalsController : ControllerBase
                 .SendAsync("approval.updated", sent, cancellationToken);
             return Ok(sent);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException)
         {
             return BadRequest(new { error = ex.Message });
         }

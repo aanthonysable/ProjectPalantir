@@ -36,12 +36,13 @@ public sealed class AiAssistantService : IAiAssistantService
         Guid userId,
         CancellationToken cancellationToken = default)
     {
-        EnsureConfigured();
+        EnsureConfigured(AiTaskKind.Summarize);
         var conversation = RequireConversation(conversationId);
         await EnsureFullEmailBodiesAsync(conversation, userId, cancellationToken);
         var transcript = BuildTranscript(conversationId, includePriorAiSummaries: false);
 
         var summary = (await _ai.CompleteAsync(
+            AiTaskKind.Summarize,
             [
                 new AiChatMessage(
                     "system",
@@ -107,12 +108,13 @@ public sealed class AiAssistantService : IAiAssistantService
         Guid? connectedAccountId = null,
         CancellationToken cancellationToken = default)
     {
-        EnsureConfigured();
+        EnsureConfigured(AiTaskKind.DraftReply);
         var conversation = RequireConversation(conversationId);
         await EnsureFullEmailBodiesAsync(conversation, userId, cancellationToken);
         var transcript = BuildTranscript(conversationId, includePriorAiSummaries: false);
 
         var draftBody = (await _ai.CompleteAsync(
+            AiTaskKind.DraftReply,
             [
                 new AiChatMessage(
                     "system",
@@ -166,12 +168,12 @@ public sealed class AiAssistantService : IAiAssistantService
         return result;
     }
 
-    private void EnsureConfigured()
+    private void EnsureConfigured(AiTaskKind task)
     {
-        if (!_ai.IsConfigured)
+        if (!_ai.IsConfiguredFor(task) && !_ai.IsConfigured)
         {
             throw new InvalidOperationException(
-                "AI is not configured. For Ollama: start ollama, pull Ai:Model, and set Ai:Provider=Ollama. For OpenAI: set Ai:ApiKey.");
+                "AI is not configured. Add Gemini (Ai:Providers:gemini:ApiKey) and/or start Ollama (Ai:Providers:ollama). See Admin → AI providers.");
         }
     }
 

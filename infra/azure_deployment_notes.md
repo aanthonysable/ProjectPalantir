@@ -12,6 +12,54 @@
 - Log Analytics Workspace
 - Entra ID app registration
 
+## Provisioned (dev — 2026-07-17)
+
+| Resource | Name |
+|----------|------|
+| Resource group | `rg-palantir-dev` |
+| SQL server | `trojansql` (existing) |
+| SQL database | `palantier-dev-sql` |
+| Key Vault | `kv-palantir-dev` |
+| Storage account | `stpalantirdev` |
+| Blob container | `knowledge` (private) |
+
+### Key Vault secrets
+
+| Secret name | Maps to config |
+|-------------|----------------|
+| `ConnectionStrings--Palantir` | `ConnectionStrings:Palantir` |
+
+Add more with `--` for nested keys (e.g. `Ai--Providers--gemini--ApiKey`).
+
+### Local development
+
+Until the API loads Key Vault at startup, keep using **dotnet user-secrets** for the SQL connection string and storage key.
+
+```bash
+cd backend/Palantir.Api
+dotnet user-secrets set "Database:Provider" "SqlServer"
+dotnet user-secrets set "ConnectionStrings:Palantir" "<ado.net string>"
+dotnet user-secrets set "Azure:KeyVault:Uri" "https://kv-palantir-dev.vault.azure.net/"
+dotnet user-secrets set "Azure:Storage:ConnectionString" "<storage connection string>"
+dotnet user-secrets set "Azure:Storage:KnowledgeContainer" "knowledge"
+```
+
+Storage connection string: portal → `stpalantirdev` → **Access keys** → **Connection string**.
+
+### Next wiring (app)
+
+- Optional: `Azure.Extensions.AspNetCore.Configuration.Secrets` to pull Key Vault into config when `Azure:KeyVault:Uri` is set (DefaultAzureCredential / `az login`).
+### Blob: use `Azure:Storage:*` for knowledge/doc uploads when the AI reference layer lands.
+
+Knowledge MVP (2026-07-17):
+
+- Upload via Admin → Knowledge (`POST /knowledge/upload`)
+- Blob path: `{orgId}/{docId}/{fileName}` in container `knowledge`
+- SQL tables: `KnowledgeDocuments`, `KnowledgeChunks`
+- Lexical retrieval injects **KNOWLEDGE EXCERPTS** into Overview recap + Ask
+- Indexable today: `.txt`, `.md`, `.csv`, `.json`, `.html` (8 MB limit)
+- AI capture: Overview Ask → **Save to knowledge** → Approvals → `POST /knowledge/capture` / approve writes a markdown note into the same store
+
 ## Environment separation
 
 - dev

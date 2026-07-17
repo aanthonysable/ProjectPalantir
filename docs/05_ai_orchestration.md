@@ -1,5 +1,17 @@
 # AI Orchestration Design
 
+## Multi-provider routing
+
+Palantir can run **more than one** AI backend at once. Named profiles live under `Ai:Providers`; `Ai:Tasks` maps each job to a profile:
+
+| Task | Typical strength |
+|------|------------------|
+| Recap / Chat | Gemini Flash — long ops fact sheets |
+| Summarize / DraftReply | Gemini — writing quality |
+| Offline / no cloud | Ollama — local llama |
+
+If the preferred provider is missing a key, the client falls back to any other configured profile. See `connectors/Gemini/README.md`.
+
 ## Purpose
 
 The AI Orchestrator transforms user intent and incoming communication into structured suggestions, summaries, drafts, tasks, and approval requests.

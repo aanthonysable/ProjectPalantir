@@ -15,9 +15,9 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "Organizations",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    Name = table.Column<string>(maxLength: 200, nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -28,15 +28,15 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "Connectors",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    DeviceId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ConnectorType = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    CapabilitiesJson = table.Column<string>(type: "TEXT", nullable: false),
-                    LastHeartbeatAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: true),
+                    DeviceId = table.Column<Guid>(nullable: true),
+                    ConnectorType = table.Column<string>(maxLength: 100, nullable: false),
+                    Name = table.Column<string>(maxLength: 200, nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    CapabilitiesJson = table.Column<string>(nullable: false),
+                    LastHeartbeatAt = table.Column<DateTimeOffset>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -46,17 +46,17 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Customers",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 300, nullable: false),
-                    MetadataJson = table.Column<string>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    Name = table.Column<string>(maxLength: 300, nullable: false),
+                    MetadataJson = table.Column<string>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -66,26 +66,26 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Tasks",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ProjectId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ConversationId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedByUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    AssignedToUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    AssignedToTeamId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Title = table.Column<string>(type: "TEXT", maxLength: 500, nullable: false),
-                    Description = table.Column<string>(type: "TEXT", nullable: true),
-                    DueAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    Priority = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    ProjectId = table.Column<Guid>(nullable: true),
+                    ConversationId = table.Column<Guid>(nullable: true),
+                    CreatedByUserId = table.Column<Guid>(nullable: false),
+                    AssignedToUserId = table.Column<Guid>(nullable: true),
+                    AssignedToTeamId = table.Column<Guid>(nullable: true),
+                    Title = table.Column<string>(maxLength: 500, nullable: false),
+                    Description = table.Column<string>(nullable: true),
+                    DueAt = table.Column<DateTimeOffset>(nullable: true),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    Priority = table.Column<string>(maxLength: 50, nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -95,16 +95,16 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Teams",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    Name = table.Column<string>(maxLength: 200, nullable: false)
                 },
                 constraints: table =>
                 {
@@ -114,19 +114,19 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Users",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    DisplayName = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Email = table.Column<string>(type: "TEXT", maxLength: 320, nullable: false),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    DisplayName = table.Column<string>(maxLength: 200, nullable: false),
+                    Email = table.Column<string>(maxLength: 320, nullable: false),
+                    IsActive = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -136,20 +136,20 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Contacts",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CustomerId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    DisplayName = table.Column<string>(type: "TEXT", maxLength: 300, nullable: false),
-                    Email = table.Column<string>(type: "TEXT", maxLength: 320, nullable: true),
-                    Phone = table.Column<string>(type: "TEXT", maxLength: 50, nullable: true),
-                    MetadataJson = table.Column<string>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    CustomerId = table.Column<Guid>(nullable: true),
+                    DisplayName = table.Column<string>(maxLength: 300, nullable: false),
+                    Email = table.Column<string>(maxLength: 320, nullable: true),
+                    Phone = table.Column<string>(maxLength: 50, nullable: true),
+                    MetadataJson = table.Column<string>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -165,14 +165,14 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "AuditEvents",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ActorUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    EventType = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                    EntityType = table.Column<string>(type: "TEXT", maxLength: 100, nullable: true),
-                    EntityId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    DetailsJson = table.Column<string>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    ActorUserId = table.Column<Guid>(nullable: true),
+                    EventType = table.Column<string>(maxLength: 100, nullable: false),
+                    EntityType = table.Column<string>(maxLength: 100, nullable: true),
+                    EntityId = table.Column<Guid>(nullable: true),
+                    DetailsJson = table.Column<string>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -182,31 +182,31 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_AuditEvents_Users_ActorUserId",
                         column: x => x.ActorUserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "ConnectedAccounts",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Provider = table.Column<string>(type: "TEXT", maxLength: 64, nullable: false),
-                    ProviderTenantId = table.Column<string>(type: "TEXT", nullable: true),
-                    ProviderAccountId = table.Column<string>(type: "TEXT", maxLength: 256, nullable: false),
-                    DisplayName = table.Column<string>(type: "TEXT", nullable: true),
-                    PrimaryAddress = table.Column<string>(type: "TEXT", nullable: true),
-                    ConnectionStatus = table.Column<string>(type: "TEXT", maxLength: 64, nullable: false),
-                    GrantedScopesJson = table.Column<string>(type: "TEXT", nullable: true),
-                    LastSuccessfulSyncAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    Provider = table.Column<string>(maxLength: 64, nullable: false),
+                    ProviderTenantId = table.Column<string>(nullable: true),
+                    ProviderAccountId = table.Column<string>(maxLength: 256, nullable: false),
+                    DisplayName = table.Column<string>(nullable: true),
+                    PrimaryAddress = table.Column<string>(nullable: true),
+                    ConnectionStatus = table.Column<string>(maxLength: 64, nullable: false),
+                    GrantedScopesJson = table.Column<string>(nullable: true),
+                    LastSuccessfulSyncAt = table.Column<DateTimeOffset>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false),
+                    UpdatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -216,20 +216,20 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.UserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Devices",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    DeviceName = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Platform = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    LastSeenAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    PushToken = table.Column<string>(type: "TEXT", nullable: true),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    DeviceName = table.Column<string>(maxLength: 200, nullable: false),
+                    Platform = table.Column<string>(maxLength: 50, nullable: false),
+                    LastSeenAt = table.Column<DateTimeOffset>(nullable: true),
+                    PushToken = table.Column<string>(nullable: true),
+                    IsActive = table.Column<bool>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -239,23 +239,23 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.UserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "ExternalIdentities",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Provider = table.Column<string>(type: "TEXT", maxLength: 64, nullable: false),
-                    Issuer = table.Column<string>(type: "TEXT", maxLength: 512, nullable: false),
-                    ProviderTenantId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: true),
-                    ProviderSubjectId = table.Column<string>(type: "TEXT", maxLength: 256, nullable: false),
-                    Email = table.Column<string>(type: "TEXT", maxLength: 320, nullable: true),
-                    IsLoginEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    LinkedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    LastVerifiedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    Provider = table.Column<string>(maxLength: 64, nullable: false),
+                    Issuer = table.Column<string>(maxLength: 512, nullable: false),
+                    ProviderTenantId = table.Column<string>(maxLength: 128, nullable: true),
+                    ProviderSubjectId = table.Column<string>(maxLength: 256, nullable: false),
+                    Email = table.Column<string>(maxLength: 320, nullable: true),
+                    IsLoginEnabled = table.Column<bool>(nullable: false),
+                    LinkedAt = table.Column<DateTimeOffset>(nullable: false),
+                    LastVerifiedAt = table.Column<DateTimeOffset>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -265,20 +265,20 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.UserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Projects",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CustomerId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 300, nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    OwnerUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    MetadataJson = table.Column<string>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    CustomerId = table.Column<Guid>(nullable: true),
+                    Name = table.Column<string>(maxLength: 300, nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    OwnerUserId = table.Column<Guid>(nullable: true),
+                    MetadataJson = table.Column<string>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -293,27 +293,27 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Projects_Users_OwnerUserId",
                         column: x => x.OwnerUserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "OAuthGrants",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ConnectedAccountId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CredentialReference = table.Column<string>(type: "TEXT", maxLength: 512, nullable: false),
-                    TokenVersion = table.Column<int>(type: "INTEGER", nullable: false),
-                    ExpiresAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    RevokedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    ConnectedAccountId = table.Column<Guid>(nullable: false),
+                    CredentialReference = table.Column<string>(maxLength: 512, nullable: false),
+                    TokenVersion = table.Column<int>(nullable: false),
+                    ExpiresAt = table.Column<DateTimeOffset>(nullable: true),
+                    RevokedAt = table.Column<DateTimeOffset>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false),
+                    UpdatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -323,24 +323,24 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.ConnectedAccountId,
                         principalTable: "ConnectedAccounts",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Conversations",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CustomerId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ProjectId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Subject = table.Column<string>(type: "TEXT", maxLength: 500, nullable: true),
-                    Channel = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    AssignedUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    AssignedTeamId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    CustomerId = table.Column<Guid>(nullable: true),
+                    ProjectId = table.Column<Guid>(nullable: true),
+                    Subject = table.Column<string>(maxLength: 500, nullable: true),
+                    Channel = table.Column<string>(maxLength: 50, nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    AssignedUserId = table.Column<Guid>(nullable: true),
+                    AssignedTeamId = table.Column<Guid>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false),
+                    UpdatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -355,7 +355,7 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Conversations_Projects_ProjectId",
                         column: x => x.ProjectId,
@@ -366,28 +366,28 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.AssignedTeamId,
                         principalTable: "Teams",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Conversations_Users_AssignedUserId",
                         column: x => x.AssignedUserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Drafts",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ConversationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CreatedByUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedByAi = table.Column<bool>(type: "INTEGER", nullable: false),
-                    Body = table.Column<string>(type: "TEXT", nullable: false),
-                    Revision = table.Column<int>(type: "INTEGER", nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    MetadataJson = table.Column<string>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    ConversationId = table.Column<Guid>(nullable: false),
+                    CreatedByUserId = table.Column<Guid>(nullable: true),
+                    CreatedByAi = table.Column<bool>(nullable: false),
+                    Body = table.Column<string>(nullable: false),
+                    Revision = table.Column<int>(nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    MetadataJson = table.Column<string>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -397,7 +397,7 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.ConversationId,
                         principalTable: "Conversations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Drafts_Users_CreatedByUserId",
                         column: x => x.CreatedByUserId,
@@ -409,17 +409,17 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "Messages",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ConversationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Direction = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false),
-                    SenderUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ContactId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Body = table.Column<string>(type: "TEXT", nullable: true),
-                    Summary = table.Column<string>(type: "TEXT", nullable: true),
-                    ProviderMessageId = table.Column<string>(type: "TEXT", maxLength: 300, nullable: true),
-                    ProviderMetadataJson = table.Column<string>(type: "TEXT", nullable: true),
-                    IsInternalNote = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    ConversationId = table.Column<Guid>(nullable: false),
+                    Direction = table.Column<string>(maxLength: 20, nullable: false),
+                    SenderUserId = table.Column<Guid>(nullable: true),
+                    ContactId = table.Column<Guid>(nullable: true),
+                    Body = table.Column<string>(nullable: true),
+                    Summary = table.Column<string>(nullable: true),
+                    ProviderMessageId = table.Column<string>(maxLength: 300, nullable: true),
+                    ProviderMetadataJson = table.Column<string>(nullable: true),
+                    IsInternalNote = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -434,7 +434,7 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.ConversationId,
                         principalTable: "Conversations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Messages_Users_SenderUserId",
                         column: x => x.SenderUserId,
@@ -446,15 +446,15 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                 name: "ApprovalRequests",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    DraftId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    RequestedForUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    RequestedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    CompletedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    CompletedByUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ExpiresAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    DraftRevision = table.Column<int>(type: "INTEGER", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    DraftId = table.Column<Guid>(nullable: true),
+                    RequestedForUserId = table.Column<Guid>(nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    RequestedAt = table.Column<DateTimeOffset>(nullable: false),
+                    CompletedAt = table.Column<DateTimeOffset>(nullable: true),
+                    CompletedByUserId = table.Column<Guid>(nullable: true),
+                    ExpiresAt = table.Column<DateTimeOffset>(nullable: true),
+                    DraftRevision = table.Column<int>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -474,26 +474,26 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.RequestedForUserId,
                         principalTable: "Users",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
                 name: "Actions",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    OrganizationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ActionType = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                    Status = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    RequestedByUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ApprovalRequestId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ClaimedByConnectorId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    IdempotencyKey = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    PayloadJson = table.Column<string>(type: "TEXT", nullable: false),
-                    ResultJson = table.Column<string>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
-                    StartedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
-                    CompletedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    OrganizationId = table.Column<Guid>(nullable: false),
+                    ActionType = table.Column<string>(maxLength: 100, nullable: false),
+                    Status = table.Column<string>(maxLength: 50, nullable: false),
+                    RequestedByUserId = table.Column<Guid>(nullable: true),
+                    ApprovalRequestId = table.Column<Guid>(nullable: true),
+                    ClaimedByConnectorId = table.Column<Guid>(nullable: true),
+                    IdempotencyKey = table.Column<string>(maxLength: 200, nullable: false),
+                    PayloadJson = table.Column<string>(nullable: false),
+                    ResultJson = table.Column<string>(nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(nullable: false),
+                    StartedAt = table.Column<DateTimeOffset>(nullable: true),
+                    CompletedAt = table.Column<DateTimeOffset>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -508,7 +508,7 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         column: x => x.OrganizationId,
                         principalTable: "Organizations",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Actions_Users_RequestedByUserId",
                         column: x => x.RequestedByUserId,

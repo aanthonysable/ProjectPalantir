@@ -6,15 +6,22 @@
   --text: #e8efe9;
   --muted: #9aada1;
   --accent: #3d8f6a;
-  --accent-soft: rgba(61, 143, 106, 0.16);
+  --accent-soft: rgba(61, 143, 106, 0.2);
+  --accent-bright: #8fd4b0;
+  --on-accent: #07140e;
+  --secondary: #c48a5a;
+  --secondary-soft: rgba(196, 138, 90, 0.2);
+  --glow-primary: #1a3328;
+  --glow-secondary: #243028;
+  --brand-mark-fg: #8fd4b0;
   --warn: #c4a35a;
   --danger: #c46b5a;
   --radius: 10px;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   color: var(--text);
   background:
-    radial-gradient(1200px 600px at 10% -10%, #1a3328 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #243028 0%, transparent 50%),
+    radial-gradient(1200px 600px at 10% -10%, var(--glow-primary) 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, var(--glow-secondary) 0%, transparent 50%),
     var(--bg);
   line-height: 1.45;
   font-weight: 400;
@@ -31,11 +38,35 @@ html,
 body,
 #root {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
-  min-height: 100vh;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+/* Keep scroll working, hide the chrome scrollbar on app surfaces */
+.stage-scroll,
+.rail,
+.ask-thread,
+.overview-chat-thread,
+.login-shell {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.stage-scroll::-webkit-scrollbar,
+.rail::-webkit-scrollbar,
+.ask-thread::-webkit-scrollbar,
+.overview-chat-thread::-webkit-scrollbar,
+.login-shell::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 button,
