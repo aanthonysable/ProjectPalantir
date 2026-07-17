@@ -16,7 +16,7 @@ Then update Running total (closed sessions only).
 
 Running total
 -------------
-6.2 hours (closed sessions through 2026-07-17)
+7.5 hours (closed sessions through 2026-07-17)
 
 Open session
 ------------
@@ -25,5 +25,4 @@ Open session
 Entries
 -------
 2026-07-16 | 3.5 | Day 1 foundation through Phase 2–4 pilot: API/web scaffold, Outlook Graph connect/sync/send, approvals, Ollama AI, pilot + Entra External ID login, full message bodies, thread sort. Session ~11:30–16:20 minus inactive break ~13:00–14:30.
-2026-07-17 | 2.2 | Ops systems track: MaintainX×2 / EZRentOut / Monday connectors, Admin health + Open work UI, theme/favicon customization, Gemini multi-provider AI + routing/fallback, Ops-3 digests focused on physical work (ON_HOLD = finished). Session 10:43–13:22 minus 0.5h distractions.
-2026-07-17 | 0.5 | Afternoon: restore local stack; knowledge uploads (4GB limits, PDF extract, progress bar, background indexing); floating error/status toasts; laptop DEPENDENCIES.md + check-deps.sh; resume todos. Session ~15:07–15:35.
+2026-07-17 | 4.0 | Full day: ops connectors (MaintainX×2 / EZRentOut / Monday), Admin health + Open work, theme/Gemini AI, Ask + knowledge (PDF, 4GB uploads, progress, background indexing), floating toasts, DEPENDENCIES/check-deps, resume todos. Session ~10:45–15:35 minus ~0.8h interruptions.
