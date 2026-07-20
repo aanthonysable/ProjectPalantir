@@ -32,7 +32,9 @@ public interface IAskAttachmentService
         IReadOnlyList<Guid> ids,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Load extracted text for chat prompt injection (caller must own the ids).</summary>
+    /// <summary>
+    /// Wait until Queued/Extracting attachments finish (or timeout), then return prompt text.
+    /// </summary>
     Task<IReadOnlyList<(AskAttachmentDto Meta, string Text)>> GetExtractedForPromptAsync(
         Guid organizationId,
         Guid userId,
@@ -44,6 +46,11 @@ public interface IAskAttachmentService
         Guid userId,
         Guid sessionId,
         IReadOnlyList<Guid> ids,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Background worker — extract text after blob is stored.</summary>
+    Task ExtractQueuedAsync(
+        Guid attachmentId,
         CancellationToken cancellationToken = default);
 
     Task<AskAttachmentPromoteResult> PromoteToKnowledgeAsync(

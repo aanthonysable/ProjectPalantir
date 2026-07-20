@@ -556,7 +556,7 @@ public sealed class OverviewService : IOverviewService
         var knowledgeQuery = string.IsNullOrWhiteSpace(focus.CustomPrompt)
             ? "procedures policy safety inventory maintenance checklist"
             : focus.CustomPrompt!;
-        var knowledgeBlock = await BuildKnowledgeBlockAsync(organizationId, knowledgeQuery, cancellationToken);
+        var (knowledgeBlock, _) = await BuildKnowledgeBlockAsync(organizationId, knowledgeQuery, cancellationToken);
 
         var narrative = (await _ai.CompleteAsync(
             AiTaskKind.Recap,
@@ -668,7 +668,16 @@ public sealed class OverviewService : IOverviewService
         snapshot = await EnrichSnapshotForQuestionAsync(snapshot, question, cancellationToken);
 
         // File review / promote needs the model (or promote path) — skip ops deterministic shortcuts.
-        var deterministic = attachedFiles.Count > 0
+        // Also skip deterministic when the question looks like a knowledge/PDF lookup or retrieval already
+        // found strong document matches — otherwise ops shortcuts ignore indexed manuals.
+        var knowledgeQuery = BuildKnowledgeSearchQuery(question, turns);
+        var (knowledgeBlock, knowledgeSources) = await BuildKnowledgeBlockAsync(
+            organizationId, knowledgeQuery, cancellationToken);
+        var knowledgeStrong = knowledgeSources.Count > 0;
+        var knowledgeQuestion = LooksLikeKnowledgeQuestion(question);
+        var wantsSourceDoc = WantsKnowledgeSourceDocument(question);
+
+        var deterministic = attachedFiles.Count > 0 || knowledgeStrong || knowledgeQuestion || wantsSourceDoc
             ? null
             : TryBuildDeterministicChatReply(snapshot, question);
         if (deterministic is not null)
@@ -690,11 +699,22 @@ public sealed class OverviewService : IOverviewService
                 cancellationToken);
             return await PersistAndReplyAsync(
                 organizationId, userId, request.SessionId, question, deterministic, snapshot, focus,
-                attachmentIds, cancellationToken);
+                attachmentIds, knowledgeSources: null, cancellationToken);
+        }
+
+        // Explicit "send me / download the source" — attach files even before the model answers.
+        if (wantsSourceDoc && knowledgeSources.Count > 0 && !knowledgeQuestion &&
+            LooksLikeSourceOnlyRequest(question))
+        {
+            var sourceReply = AppendKnowledgeSourceMarkers(
+                BuildKnowledgeSourceReply(knowledgeSources),
+                knowledgeSources);
+            return await PersistAndReplyAsync(
+                organizationId, userId, request.SessionId, question, sourceReply, snapshot, focus,
+                attachmentIds, knowledgeSources, cancellationToken);
         }
 
         var factSheet = BuildChatFactSheet(snapshot, question);
-        var knowledgeBlock = await BuildKnowledgeBlockAsync(organizationId, question, cancellationToken);
 
         if (!_ai.IsConfiguredFor(AiTaskKind.Chat) && !_ai.IsConfigured)
         {
@@ -713,7 +733,7 @@ public sealed class OverviewService : IOverviewService
 
             return await PersistAndReplyAsync(
                 organizationId, userId, request.SessionId, question, fallback, snapshot, focus,
-                attachmentIds, cancellationToken);
+                attachmentIds, knowledgeSources, cancellationToken);
         }
 
         var custom = string.IsNullOrWhiteSpace(focus.CustomPrompt)
@@ -728,7 +748,8 @@ public sealed class OverviewService : IOverviewService
                 You are an internal Sable ops assistant. Readers already know the shop.
 
                 The FACT SHEET was just retrieved from live MaintainX / EZRentOut / Monday / inventory and ranked for THIS question.
-                KNOWLEDGE EXCERPTS and PRIOR ASK HISTORY were searched against the question text.
+                KNOWLEDGE EXCERPTS were searched against indexed org documents (PDF manuals, tutorials, wiring packs, captured notes) using title/tags/body.
+                PRIOR ASK HISTORY was searched against prior chats.
                 ATTACHED FILES (if present) were uploaded for THIS turn — review them when the user asks about the file/document.
                 Answer ONLY from those blocks. Prefer live FACT SHEET over prior Ask history when they conflict. Copy names, WO#, and asset ids exactly as written.
                 Rules:
@@ -746,19 +767,37 @@ public sealed class OverviewService : IOverviewService
                 - No company intro. No full recap unless asked.
                 - If the answer is not in the FACT SHEET, KNOWLEDGE EXCERPTS, or ATTACHED FILES, say what is missing — do not invent.
                 - ON_HOLD = physically finished; back office can close later. Only discuss ON_HOLD if the user asks.
-                - For policy/procedure questions, prefer KNOWLEDGE EXCERPTS and cite the document title.
-                - When ATTACHED FILES are present, prioritize reviewing their extracted text for file questions. If extract status is Empty/Unsupported, say so.
+                - For how-to / procedure / wiring / datasheet / tutorial / PDF questions: prefer KNOWLEDGE EXCERPTS over the live fact sheet. Cite the document title. Quote concrete steps from excerpts when present.
+                - When knowledge documents are matched, name the document title. The app will offer a Preview of the original file (with Download from there) — say the source is available to preview when the user asked for the file/PDF/source.
+                - Do not invent download URLs. Do not claim a file is attached unless SOURCE DOCUMENTS are listed in the user message.
+                - When ATTACHED FILES are present, prioritize reviewing their extracted text for file questions. If extract status is Empty/Unsupported, say so. Zips may be Ready or Partial (some entries skipped); review each --- path --- section.
                 - Do not claim you saved a file to knowledge unless the user message or a system note says it was promoted.
                 """),
             new(
                 "user",
-                $"""
-                LIVE FACT SHEET for question (completion window = {snapshot.CompletionWindowLabel}):
-                {factSheet}
-                {knowledgeBlock}
-                {attachmentBlock}
-                {(custom is null ? "" : "\n" + custom)}
-                """)
+                knowledgeStrong || knowledgeQuestion || wantsSourceDoc
+                    ? $"""
+                    This question looks like an org-knowledge / document lookup. Prefer KNOWLEDGE EXCERPTS; use the FACT SHEET only for live ops counts if needed.
+                    Completion window = {snapshot.CompletionWindowLabel}
+                    {(knowledgeSources.Count > 0
+                        ? "SOURCE DOCUMENTS (app will offer Preview → Download):\n" +
+                          string.Join("\n", knowledgeSources.Select(s => $"- {s.Title} ({s.FileName}) id={s.DocumentId:N}"))
+                        : "SOURCE DOCUMENTS: (none matched)")}
+
+                    {knowledgeBlock}
+
+                    LIVE FACT SHEET (secondary for this question):
+                    {factSheet}
+                    {attachmentBlock}
+                    {(custom is null ? "" : "\n" + custom)}
+                    """
+                    : $"""
+                    LIVE FACT SHEET for question (completion window = {snapshot.CompletionWindowLabel}):
+                    {factSheet}
+                    {knowledgeBlock}
+                    {attachmentBlock}
+                    {(custom is null ? "" : "\n" + custom)}
+                    """)
         };
 
         foreach (var turn in turns)
@@ -785,6 +824,12 @@ public sealed class OverviewService : IOverviewService
             reply = string.IsNullOrWhiteSpace(promoteNote) ? reply : $"{reply.TrimEnd()}\n\n{promoteNote}";
         }
 
+        var sourcesToAttach = knowledgeStrong || wantsSourceDoc ? knowledgeSources : null;
+        if (sourcesToAttach is { Count: > 0 })
+        {
+            reply = AppendKnowledgeSourceMarkers(reply, sourcesToAttach);
+        }
+
         await _audit.WriteAsync(
             organizationId,
             "overview.chat",
@@ -797,6 +842,7 @@ public sealed class OverviewService : IOverviewService
                 refreshFacts = request.RefreshFacts,
                 attachmentCount = attachedFiles.Count,
                 promoted = wantsPromoteAttachments,
+                knowledgeSourceCount = sourcesToAttach?.Count ?? 0,
                 questionChars = turns[^1].Content.Length,
                 counts = snapshot.Counts
             }),
@@ -804,7 +850,7 @@ public sealed class OverviewService : IOverviewService
 
         return await PersistAndReplyAsync(
             organizationId, userId, request.SessionId, question, reply, snapshot, focus,
-            attachmentIds, cancellationToken);
+            attachmentIds, sourcesToAttach, cancellationToken);
     }
 
 
@@ -817,6 +863,7 @@ public sealed class OverviewService : IOverviewService
         OverviewSnapshotDto snapshot,
         OverviewFocus focus,
         IReadOnlyList<Guid> attachmentIds,
+        IReadOnlyList<KnowledgeSourceDto>? knowledgeSources,
         CancellationToken cancellationToken)
     {
         var (resolvedSessionId, _) = await _askHistory.AppendTurnAsync(
@@ -840,7 +887,13 @@ public sealed class OverviewService : IOverviewService
             }
         }
 
-        return new OverviewChatReplyDto(DateTimeOffset.UtcNow, reply, snapshot, focus, resolvedSessionId);
+        return new OverviewChatReplyDto(
+            DateTimeOffset.UtcNow,
+            reply,
+            snapshot,
+            focus,
+            resolvedSessionId,
+            knowledgeSources);
     }
 
     private static string BuildAskAttachmentBlock(
@@ -918,7 +971,7 @@ public sealed class OverviewService : IOverviewService
             : "Added to knowledge:\n" + string.Join("\n", lines);
     }
 
-    // Compatibility overload used by recap/other callers if any remain.
+    // Compatibility overload used by older call sites.
     private Task<OverviewChatReplyDto> PersistAndReplyAsync(
         Guid organizationId,
         Guid userId,
@@ -929,7 +982,20 @@ public sealed class OverviewService : IOverviewService
         OverviewFocus focus,
         CancellationToken cancellationToken) =>
         PersistAndReplyAsync(
-            organizationId, userId, sessionId, question, reply, snapshot, focus, [], cancellationToken);
+            organizationId, userId, sessionId, question, reply, snapshot, focus, [], null, cancellationToken);
+
+    private Task<OverviewChatReplyDto> PersistAndReplyAsync(
+        Guid organizationId,
+        Guid userId,
+        Guid? sessionId,
+        string question,
+        string reply,
+        OverviewSnapshotDto snapshot,
+        OverviewFocus focus,
+        IReadOnlyList<Guid> attachmentIds,
+        CancellationToken cancellationToken) =>
+        PersistAndReplyAsync(
+            organizationId, userId, sessionId, question, reply, snapshot, focus, attachmentIds, null, cancellationToken);
 
     /// <summary>
     /// For common factual questions, answer from structured data so local Llama cannot invent names/WO#s.
@@ -1890,7 +1956,7 @@ public sealed class OverviewService : IOverviewService
         "please", "show", "list", "tell", "need", "know", "looking", "find", "get", "does", "did"
     };
 
-    private async Task<string> BuildKnowledgeBlockAsync(
+    private async Task<(string Block, IReadOnlyList<KnowledgeSourceDto> Sources)> BuildKnowledgeBlockAsync(
         Guid organizationId,
         string query,
         CancellationToken cancellationToken)
@@ -1898,18 +1964,42 @@ public sealed class OverviewService : IOverviewService
         var sb = new StringBuilder();
         sb.AppendLine();
         sb.AppendLine("KNOWLEDGE EXCERPTS:");
+        IReadOnlyList<KnowledgeSourceDto> sources = [];
         try
         {
-            var excerpts = await _knowledge.SearchAsync(organizationId, query, limit: 6, cancellationToken);
+            var excerpts = await _knowledge.SearchAsync(organizationId, query, limit: 8, cancellationToken);
             if (excerpts.Count == 0)
             {
                 sb.AppendLine("(none matched — no indexed docs or no overlap with the query)");
+                var catalog = await _knowledge.ListIndexedCatalogAsync(organizationId, limit: 40, cancellationToken);
+                if (catalog.Count > 0)
+                {
+                    sb.AppendLine("INDEXED KNOWLEDGE LIBRARY (titles — ask again with a document name if relevant):");
+                    foreach (var item in catalog)
+                    {
+                        sb.AppendLine($"- {item.Title}");
+                    }
+                }
             }
             else
             {
+                sources = excerpts
+                    .GroupBy(e => e.DocumentId)
+                    .Select(g =>
+                    {
+                        var first = g.First();
+                        return new KnowledgeSourceDto(first.DocumentId, first.Title, first.FileName);
+                    })
+                    .Take(6)
+                    .ToList();
+
                 foreach (var excerpt in excerpts)
                 {
-                    sb.AppendLine($"- [{excerpt.Title} · {excerpt.FileName} #{excerpt.Ordinal}] {excerpt.Text}");
+                    var tagBit = string.IsNullOrWhiteSpace(excerpt.Tags)
+                        ? ""
+                        : $" tags={TrimCatalogTags(excerpt.Tags)}";
+                    sb.AppendLine(
+                        $"- [{excerpt.Title} · {excerpt.FileName} #{excerpt.Ordinal} score={excerpt.Score:0.0}{tagBit}] {excerpt.Text}");
                 }
             }
         }
@@ -1940,7 +2030,136 @@ public sealed class OverviewService : IOverviewService
             sb.AppendLine("(ask history unavailable)");
         }
 
+        return (sb.ToString().TrimEnd(), sources);
+    }
+
+    private static string BuildKnowledgeSearchQuery(string question, IReadOnlyList<OverviewChatTurnDto> turns)
+    {
+        if (!WantsKnowledgeSourceDocument(question) || turns.Count <= 1)
+        {
+            return question;
+        }
+
+        // Follow-ups like "send me that PDF" need prior question context for retrieval.
+        var prior = turns
+            .Take(turns.Count - 1)
+            .Reverse()
+            .Where(t => t.Role is "user" or "assistant")
+            .Take(4)
+            .Reverse()
+            .Select(t => t.Content);
+        return string.Join("\n", prior.Append(question));
+    }
+
+    private static bool WantsKnowledgeSourceDocument(string question)
+    {
+        var q = question.Trim().ToLowerInvariant();
+        return q.Contains("download") ||
+               q.Contains("source document") ||
+               q.Contains("source file") ||
+               q.Contains("original document") ||
+               q.Contains("original pdf") ||
+               q.Contains("original file") ||
+               q.Contains("send me the pdf") ||
+               q.Contains("send me the file") ||
+               q.Contains("send me that") ||
+               q.Contains("give me the pdf") ||
+               q.Contains("give me the file") ||
+               q.Contains("give me the document") ||
+               q.Contains("get me the pdf") ||
+               q.Contains("get me the file") ||
+               q.Contains("can i get the") ||
+               q.Contains("attach the") ||
+               q.Contains("link to the") ||
+               (q.Contains("source") && (q.Contains("pdf") || q.Contains("doc") || q.Contains("file") ||
+                                         q.Contains("manual") || q.Contains("that")));
+    }
+
+    private static bool LooksLikeSourceOnlyRequest(string question)
+    {
+        var q = question.Trim().ToLowerInvariant();
+        // Short asks that are mainly about fetching the file, not explaining contents.
+        if (q.Length > 120)
+        {
+            return false;
+        }
+
+        return WantsKnowledgeSourceDocument(question) &&
+               !(q.Contains("how do") || q.Contains("how to") || q.Contains("explain") ||
+                 q.Contains("what does") || q.Contains("summarize") || q.Contains("walk me"));
+    }
+
+    private static string BuildKnowledgeSourceReply(IReadOnlyList<KnowledgeSourceDto> sources)
+    {
+        if (sources.Count == 1)
+        {
+            return $"Here's the source document — use Preview below to view “{sources[0].Title}” ({sources[0].FileName}), then Download from the previewer if you want a copy.";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Here are the matching source documents — use Preview below to view them (Download is in the previewer):");
+        foreach (var s in sources)
+        {
+            sb.AppendLine($"- {s.Title} ({s.FileName})");
+        }
+
         return sb.ToString().TrimEnd();
+    }
+
+    private static string AppendKnowledgeSourceMarkers(
+        string reply,
+        IReadOnlyList<KnowledgeSourceDto> sources)
+    {
+        if (sources.Count == 0)
+        {
+            return reply;
+        }
+
+        var sb = new StringBuilder(reply.TrimEnd());
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine("‹knowledge-sources›");
+        foreach (var s in sources)
+        {
+            // Pipe-delimited: id|title|fileName — UI parses this into Preview buttons.
+            sb.AppendLine($"{s.DocumentId:D}|{SanitizeSourceField(s.Title)}|{SanitizeSourceField(s.FileName)}");
+        }
+
+        sb.Append("‹/knowledge-sources›");
+        return sb.ToString();
+    }
+
+    private static string SanitizeSourceField(string value) =>
+        value.Replace('|', '/').Replace('\n', ' ').Replace('\r', ' ').Trim();
+
+    private static string TrimCatalogTags(string tags) =>
+        tags.Length <= 120 ? tags : tags[..120] + "…";
+
+    private static bool LooksLikeKnowledgeQuestion(string question)
+    {
+        var q = question.Trim().ToLowerInvariant();
+        if (q.Length < 8)
+        {
+            return false;
+        }
+
+        // Live ops questions should stay on the fact-sheet path.
+        if (q.Contains("who has") || q.Contains("how many") || q.Contains("open work") ||
+            q.Contains("on rent") || q.Contains("on-rent") || q.Contains("ezrent") ||
+            q.Contains("quote") || q.Contains("billed") || q.Contains("inventory") ||
+            q.Contains("work order") || q.Contains("wo#") || q.Contains("maintainx"))
+        {
+            return false;
+        }
+
+        return q.Contains("how do") || q.Contains("how to") || q.Contains("procedure") ||
+               q.Contains("manual") || q.Contains("tutorial") || q.Contains("datasheet") ||
+               q.Contains("wiring") || q.Contains("schematic") || q.Contains("install") ||
+               q.Contains("setup") || q.Contains("set up") || q.Contains("harness") ||
+               q.Contains("modbus") || q.Contains("vfd") || q.Contains("plc") ||
+               q.Contains("pdf") || q.Contains("documentation") || q.Contains("sop") ||
+               q.Contains("knowledge") || q.Contains("according to") || q.Contains("in the doc") ||
+               q.Contains("strap") || q.Contains("iso tank");
     }
 
     private static string BuildFactSheet(OverviewSnapshotDto snapshot)

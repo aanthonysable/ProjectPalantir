@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Palantir.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Palantir.Infrastructure.Persistence;
 namespace Palantir.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PalantirDbContext))]
-    partial class PalantirDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260720175853_AddKnowledgeDocumentTags")]
+    partial class AddKnowledgeDocumentTags
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -603,15 +606,6 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Property<long>("ByteSize")
                         .HasColumnType("bigint");
 
-                    b.Property<string>("Collection")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
-                    b.Property<string>("ContentHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
                     b.Property<string>("ContentType")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -620,15 +614,8 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<Guid?>("DuplicateOfDocumentId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<string>("FileName")
                         .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("nvarchar(260)");
-
-                    b.Property<string>("FolderPath")
                         .HasMaxLength(260)
                         .HasColumnType("nvarchar(260)");
 
@@ -661,15 +648,9 @@ namespace Palantir.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DuplicateOfDocumentId");
-
                     b.HasIndex("UploadedByUserId");
 
-                    b.HasIndex("OrganizationId", "ContentHash");
-
                     b.HasIndex("OrganizationId", "CreatedAt");
-
-                    b.HasIndex("OrganizationId", "Collection", "FolderPath");
 
                     b.ToTable("KnowledgeDocuments", (string)null);
                 });
@@ -1278,11 +1259,6 @@ namespace Palantir.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Palantir.Domain.Entities.KnowledgeDocument", b =>
                 {
-                    b.HasOne("Palantir.Domain.Entities.KnowledgeDocument", null)
-                        .WithMany()
-                        .HasForeignKey("DuplicateOfDocumentId")
-                        .OnDelete(DeleteBehavior.NoAction);
-
                     b.HasOne("Palantir.Domain.Entities.Organization", "Organization")
                         .WithMany()
                         .HasForeignKey("OrganizationId")

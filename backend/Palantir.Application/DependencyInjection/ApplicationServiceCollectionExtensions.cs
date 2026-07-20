@@ -20,6 +20,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<ITaskService, TaskService>();
         services.AddScoped<IOutlookInboxSyncService, OutlookInboxSyncService>();
+        services.AddScoped<IWhatsAppIngestService, WhatsAppIngestService>();
+        services.AddScoped<IWhatsAppOpsWatchService, WhatsAppOpsWatchService>();
         services.AddScoped<IOutboundEmailService, OutboundEmailService>();
         services.AddScoped<IOpsWriteBackService, OpsWriteBackService>();
         services.AddScoped<IAiAssistantService, AiAssistantService>();

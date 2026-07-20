@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
+import { MenuSelect } from './MenuSelect'
 import {
   ApiError,
   ApprovalItem,
@@ -42,28 +43,37 @@ import {
   defaultOverviewFocus,
   askOverviewChat,
   uploadAskAttachments,
+  getAskAttachments,
   listAskSessions,
   getAskSession,
   deleteAskSession,
   getOpsHealth,
   getOpsOpenWork,
+  getWhatsAppStatus,
+  getWhatsAppGaps,
   proposeOpsWriteBack,
   getAiStatus,
   getKnowledgeStatus,
   listKnowledgeDocuments,
+  getKnowledgeLibrary,
   uploadKnowledgeDocuments,
   deleteKnowledgeDocument,
+  downloadKnowledgeFile,
+  fetchKnowledgeFileBlob,
   proposeKnowledgeCapture,
   AiStatus,
   ConnectorHealth,
   ExternalWorkItem,
   KnowledgeDocument,
+  KnowledgeLibrary,
+  KnowledgeSource,
   KnowledgeStatus,
   UploadProgress,
   OverviewChatTurn,
   OverviewFocus,
   AskSessionSummary,
-  AskAttachment,
+  WhatsAppBridgeStatus,
+  WhatsAppGap,
 } from './api'
 import { signInWithEntra } from './entraAuth'
 import { BrandMark } from './BrandMark'
@@ -77,12 +87,55 @@ import {
 } from './theme'
 import './App.css'
 
-const readyNavItems = ['Ask', 'Open work', 'Inbox', 'Tasks', 'Approvals', 'Admin'] as const
+const readyNavItems = ['Ask', 'Knowledge', 'Open work', 'Inbox', 'Tasks', 'Approvals', 'Admin'] as const
 const soonNavItems = ['Projects', 'Customers'] as const
 const navItems = [...readyNavItems, ...soonNavItems] as const
 type NavItem = (typeof navItems)[number]
 
 const OVERVIEW_PREFS_KEY = 'palantir.overviewFocus.v4'
+
+const KNOWLEDGE_SOURCES_RE =
+  /‹knowledge-sources›\s*([\s\S]*?)‹\/knowledge-sources›/i
+
+function parseKnowledgeSourcesFromContent(content: string): {
+  display: string
+  sources: KnowledgeSource[]
+} {
+  const match = KNOWLEDGE_SOURCES_RE.exec(content)
+  if (!match) {
+    return { display: content, sources: [] }
+  }
+
+  const sources: KnowledgeSource[] = []
+  for (const line of match[1].split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const parts = trimmed.split('|')
+    if (parts.length < 2) continue
+    const [documentId, title, fileName] = parts
+    if (!documentId) continue
+    sources.push({
+      documentId: documentId.trim(),
+      title: (title || 'Knowledge document').trim(),
+      fileName: (fileName || title || 'file').trim(),
+    })
+  }
+
+  const display = content.replace(KNOWLEDGE_SOURCES_RE, '').trimEnd()
+  return { display, sources }
+}
+
+type AskUploadChip = {
+  localKey: string
+  fileName: string
+  id: string | null
+  status: string
+  error?: string
+}
+
+function askExtractPending(status: string) {
+  return status === 'uploading' || status === 'Queued' || status === 'Extracting'
+}
 
 type OpenWorkFilters = {
   source: string
@@ -164,6 +217,22 @@ function formatEta(seconds: number | null) {
   return remMins > 0 ? `~${hours}h ${remMins}m left` : `~${hours}h left`
 }
 
+function PanelWorking({ label }: { label: string }) {
+  return (
+    <div className="ask-thinking panel-working" role="status" aria-live="polite">
+      <span className="ask-thinking-label">
+        {label}
+        <span className="ask-thinking-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </span>
+      <span className="ask-thinking-bar" aria-hidden="true" />
+    </div>
+  )
+}
+
 export default function App() {
   const [session, setSession] = useState<SessionUser | null>(() => getStoredSession())
   const [loginEmail, setLoginEmail] = useState('alec.anthony@dnow.com')
@@ -174,6 +243,9 @@ export default function App() {
   const [registerPassword, setRegisterPassword] = useState('')
   const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null)
   const [active, setActive] = useState<NavItem>('Inbox')
+  const [navOpen, setNavOpen] = useState(false)
+  const [askHistoryOpen, setAskHistoryOpen] = useState(false)
+  const [inboxComposeOpen, setInboxComposeOpen] = useState(false)
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -202,13 +274,40 @@ export default function App() {
   const [askSourcesOpen, setAskSourcesOpen] = useState(false)
   const [askSessions, setAskSessions] = useState<AskSessionSummary[]>([])
   const [askSessionId, setAskSessionId] = useState<string | null>(null)
-  const [askPendingFiles, setAskPendingFiles] = useState<File[]>([])
+  const [askPendingFiles, setAskPendingFiles] = useState<AskUploadChip[]>([])
   const askFileInputRef = useRef<HTMLInputElement | null>(null)
+  const textPromptInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  const textPromptResolver = useRef<((value: string | null) => void) | null>(null)
+  const [textPrompt, setTextPrompt] = useState<{
+    heading: string
+    description?: string
+    label?: string
+    confirmLabel: string
+    multiline: boolean
+    value: string
+  } | null>(null)
   const [opsHealth, setOpsHealth] = useState<ConnectorHealth[]>([])
+  const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppBridgeStatus | null>(null)
+  const [whatsAppGaps, setWhatsAppGaps] = useState<WhatsAppGap[]>([])
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null)
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([])
+  const [knowledgeLibrary, setKnowledgeLibrary] = useState<KnowledgeLibrary | null>(null)
+  const [knowledgeBrowseCollection, setKnowledgeBrowseCollection] = useState<string>('all')
+  const [knowledgeBrowseFolder, setKnowledgeBrowseFolder] = useState<string>('all')
+  const [knowledgeBrowseQuery, setKnowledgeBrowseQuery] = useState('')
   const [knowledgeTitle, setKnowledgeTitle] = useState('')
+  const [knowledgeUploadOpen, setKnowledgeUploadOpen] = useState(false)
+  const [knowledgePreview, setKnowledgePreview] = useState<{
+    documentId: string
+    title: string
+    fileName: string
+    loading: boolean
+    error: string | null
+    objectUrl: string | null
+    contentType: string | null
+    textPreview: string | null
+  } | null>(null)
   const [uploadProgress, setUploadProgress] = useState<{
     percent: number
     loaded: number
@@ -222,6 +321,10 @@ export default function App() {
     defaultOpenWorkFilters(),
   )
   const [openWorkLoadedAt, setOpenWorkLoadedAt] = useState<string | null>(null)
+  const [openWorkLoading, setOpenWorkLoading] = useState(false)
+  const [openWorkReady, setOpenWorkReady] = useState(false)
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false)
+  const [knowledgeReady, setKnowledgeReady] = useState(false)
   const [writeBackTarget, setWriteBackTarget] = useState<ExternalWorkItem | null>(null)
   const [writeBackBody, setWriteBackBody] = useState('')
   const [theme, setTheme] = useState<ThemeColors>(() => loadTheme())
@@ -251,15 +354,19 @@ export default function App() {
     const text = (question ?? overviewChatDraft).trim()
     const pendingFiles = askPendingFiles
     if ((!text && pendingFiles.length === 0) || overviewChatBusy) return
+    if (pendingFiles.some((f) => f.status === 'uploading' || f.status === 'error' || !f.id)) {
+      setError('Wait for attachments to finish uploading before asking.')
+      return
+    }
 
     const content =
       text ||
       (pendingFiles.length === 1
-        ? `Please review the attached file (${pendingFiles[0].name}).`
+        ? `Please review the attached file (${pendingFiles[0].fileName}).`
         : `Please review the ${pendingFiles.length} attached files.`)
     const fileNote =
       pendingFiles.length > 0
-        ? `\n\n[Attached: ${pendingFiles.map((f) => f.name).join(', ')}]`
+        ? `\n\n[Attached: ${pendingFiles.map((f) => f.fileName).join(', ')}]`
         : ''
     const nextTurns: OverviewChatTurn[] = [
       ...overviewChat,
@@ -271,11 +378,7 @@ export default function App() {
     setOverviewChatBusy(true)
     setError(null)
     try {
-      let attachmentIds: string[] = []
-      if (pendingFiles.length > 0) {
-        const uploaded = await uploadAskAttachments(pendingFiles, askSessionId)
-        attachmentIds = uploaded.map((a: AskAttachment) => a.id)
-      }
+      const attachmentIds = pendingFiles.map((f) => f.id!).filter(Boolean)
       const reply = await askOverviewChat(
         overviewFocus,
         nextTurns,
@@ -283,7 +386,20 @@ export default function App() {
         askSessionId,
         attachmentIds,
       )
-      setOverviewChat([...nextTurns, { role: 'assistant', content: reply.reply }])
+      const parsedReply = parseKnowledgeSourcesFromContent(reply.reply)
+      setOverviewChat([
+        ...nextTurns,
+        {
+          role: 'assistant',
+          content: parsedReply.display,
+          knowledgeSources:
+            reply.knowledgeSources && reply.knowledgeSources.length > 0
+              ? reply.knowledgeSources
+              : parsedReply.sources.length > 0
+                ? parsedReply.sources
+                : undefined,
+        },
+      ])
       setAskSessionId(reply.sessionId)
       setStatusBanner(`Live facts · ${new Date(reply.generatedAt).toLocaleString()}`)
       const sessions = await listAskSessions()
@@ -300,10 +416,98 @@ export default function App() {
 
   const onAskFilesChosen = (files: FileList | null) => {
     if (!files || files.length === 0) return
-    const next = [...askPendingFiles, ...Array.from(files)].slice(0, 5)
-    setAskPendingFiles(next)
-    if (askFileInputRef.current) askFileInputRef.current.value = ''
+    const room = Math.max(0, 5 - askPendingFiles.length)
+    const chosen = Array.from(files).slice(0, room)
+    if (chosen.length === 0) return
+
+    const chips: AskUploadChip[] = chosen.map((file) => ({
+      localKey: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+      fileName: file.name,
+      id: null,
+      status: 'uploading',
+    }))
+    setAskPendingFiles((prev) => [...prev, ...chips].slice(0, 5))
+    setError(null)
+
+    void (async () => {
+      try {
+        const uploaded = await uploadAskAttachments(chosen, askSessionId)
+        setAskPendingFiles((prev) => {
+          const next = [...prev]
+          for (let i = 0; i < chips.length; i++) {
+            const chipIdx = next.findIndex((c) => c.localKey === chips[i].localKey)
+            const row = uploaded[i]
+            if (chipIdx < 0) continue
+            if (!row) {
+              next[chipIdx] = {
+                ...next[chipIdx],
+                status: 'error',
+                error: 'Upload returned no attachment',
+              }
+              continue
+            }
+            next[chipIdx] = {
+              ...next[chipIdx],
+              id: row.id,
+              status: row.extractStatus || 'Queued',
+            }
+          }
+          return next
+        })
+        setStatusBanner(
+          uploaded.length === 1
+            ? `Attached ${uploaded[0].fileName} — extracting in background…`
+            : `Attached ${uploaded.length} files — extracting in background…`,
+        )
+      } catch (err) {
+        setAskPendingFiles((prev) =>
+          prev.map((c) =>
+            chips.some((x) => x.localKey === c.localKey)
+              ? {
+                  ...c,
+                  status: 'error',
+                  error: err instanceof Error ? err.message : 'Upload failed',
+                }
+              : c,
+          ),
+        )
+        setError(err instanceof Error ? err.message : 'Attachment upload failed')
+      } finally {
+        if (askFileInputRef.current) askFileInputRef.current.value = ''
+      }
+    })()
   }
+
+  useEffect(() => {
+    const pendingIds = askPendingFiles
+      .filter((f) => f.id && (f.status === 'Queued' || f.status === 'Extracting'))
+      .map((f) => f.id!)
+    if (pendingIds.length === 0) return
+
+    const timer = window.setInterval(() => {
+      void getAskAttachments(pendingIds)
+        .then((rows) => {
+          setAskPendingFiles((prev) =>
+            prev.map((chip) => {
+              if (!chip.id) return chip
+              const row = rows.find((r) => r.id === chip.id)
+              if (!row) return chip
+              return { ...chip, status: row.extractStatus || chip.status }
+            }),
+          )
+        })
+        .catch(() => {
+          /* ignore transient poll errors */
+        })
+    }, 1500)
+
+    return () => window.clearInterval(timer)
+  }, [
+    askPendingFiles
+      .filter((f) => f.status === 'Queued' || f.status === 'Extracting')
+      .map((f) => f.id)
+      .join(','),
+  ])
 
   const refreshAskSessions = async () => {
     setAskSessions(await listAskSessions())
@@ -324,10 +528,18 @@ export default function App() {
       const detail = await getAskSession(sessionId)
       setAskSessionId(detail.id)
       setOverviewChat(
-        detail.messages.map((m) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
+        detail.messages.map((m) => {
+          const role = m.role === 'assistant' ? 'assistant' : 'user'
+          if (role !== 'assistant') {
+            return { role, content: m.content }
+          }
+          const parsed = parseKnowledgeSourcesFromContent(m.content)
+          return {
+            role,
+            content: parsed.display,
+            knowledgeSources: parsed.sources.length > 0 ? parsed.sources : undefined,
+          }
+        }),
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load chat')
@@ -383,14 +595,103 @@ export default function App() {
     setOpsHealth(await getOpsHealth())
   }
 
+  const refreshWhatsApp = async () => {
+    const [status, gaps] = await Promise.all([
+      getWhatsAppStatus(),
+      getWhatsAppGaps().catch(() => [] as WhatsAppGap[]),
+    ])
+    setWhatsAppStatus(status)
+    setWhatsAppGaps(gaps)
+  }
+
   const refreshAiStatus = async () => {
     setAiStatus(await getAiStatus())
   }
 
   const refreshKnowledge = async () => {
-    const [status, docs] = await Promise.all([getKnowledgeStatus(), listKnowledgeDocuments()])
-    setKnowledgeStatus(status)
-    setKnowledgeDocs(docs)
+    setKnowledgeLoading(true)
+    try {
+      const [status, docs, library] = await Promise.all([
+        getKnowledgeStatus(),
+        listKnowledgeDocuments(),
+        getKnowledgeLibrary().catch(() => null),
+      ])
+      setKnowledgeStatus(status)
+      setKnowledgeDocs(docs)
+      setKnowledgeLibrary(library)
+      setKnowledgeReady(true)
+    } finally {
+      setKnowledgeLoading(false)
+    }
+  }
+
+  const closeKnowledgePreview = () => {
+    setKnowledgePreview((prev) => {
+      if (prev?.objectUrl) URL.revokeObjectURL(prev.objectUrl)
+      return null
+    })
+  }
+
+  const openKnowledgePreview = (doc: {
+    documentId: string
+    title: string
+    fileName: string
+  }) => {
+    setKnowledgePreview((prev) => {
+      if (prev?.objectUrl) URL.revokeObjectURL(prev.objectUrl)
+      return {
+        documentId: doc.documentId,
+        title: doc.title,
+        fileName: doc.fileName,
+        loading: true,
+        error: null,
+        objectUrl: null,
+        contentType: null,
+        textPreview: null,
+      }
+    })
+    void fetchKnowledgeFileBlob(doc.documentId, doc.fileName)
+      .then(async (file) => {
+        const type = (file.contentType || '').toLowerCase()
+        const name = file.fileName.toLowerCase()
+        const isText =
+          type.startsWith('text/') ||
+          type.includes('json') ||
+          type.includes('xml') ||
+          type.includes('markdown') ||
+          /\.(txt|md|csv|json|log|xml|html|htm)$/i.test(name)
+
+        let textPreview: string | null = null
+        if (isText && file.blob.size <= 2 * 1024 * 1024) {
+          textPreview = await file.blob.text()
+        }
+
+        setKnowledgePreview((prev) => {
+          if (!prev || prev.documentId !== doc.documentId) {
+            URL.revokeObjectURL(file.objectUrl)
+            return prev
+          }
+          return {
+            ...prev,
+            loading: false,
+            objectUrl: file.objectUrl,
+            contentType: file.contentType,
+            fileName: file.fileName,
+            textPreview,
+          }
+        })
+      })
+      .catch((err) => {
+        setKnowledgePreview((prev) =>
+          prev && prev.documentId === doc.documentId
+            ? {
+                ...prev,
+                loading: false,
+                error: err instanceof Error ? err.message : 'Could not open preview',
+              }
+            : prev,
+        )
+      })
   }
 
   const onUploadKnowledge = async (fileList: FileList | File[] | null) => {
@@ -435,6 +736,7 @@ export default function App() {
         },
       )
       setKnowledgeTitle('')
+      setKnowledgeUploadOpen(false)
       const queued = batch.results.filter(
         (r) => r.document.status === 'Queued' || r.document.status === 'Indexing',
       ).length
@@ -475,9 +777,15 @@ export default function App() {
   }
 
   const refreshOpenWork = async () => {
-    const items = await getOpsOpenWork()
-    setOpenWorkItems(items)
-    setOpenWorkLoadedAt(new Date().toISOString())
+    setOpenWorkLoading(true)
+    try {
+      const items = await getOpsOpenWork()
+      setOpenWorkItems(items)
+      setOpenWorkLoadedAt(new Date().toISOString())
+      setOpenWorkReady(true)
+    } finally {
+      setOpenWorkLoading(false)
+    }
   }
 
   const refresh = async () => {
@@ -580,8 +888,13 @@ export default function App() {
   useEffect(() => {
     if (!session) return
     if (active === 'Admin') {
-      void Promise.all([refreshOpsHealth(), refreshAiStatus(), refreshKnowledge()]).catch((err) =>
+      void Promise.all([refreshOpsHealth(), refreshAiStatus(), refreshWhatsApp()]).catch((err) =>
         setError(err instanceof Error ? err.message : 'Admin status check failed'),
+      )
+    }
+    if (active === 'Knowledge') {
+      void refreshKnowledge().catch((err) =>
+        setError(err instanceof Error ? err.message : 'Knowledge load failed'),
       )
     }
     if (active === 'Open work') {
@@ -777,12 +1090,68 @@ export default function App() {
     }
   }
 
+  const closeTextPrompt = (value: string | null) => {
+    const resolve = textPromptResolver.current
+    textPromptResolver.current = null
+    setTextPrompt(null)
+    resolve?.(value)
+  }
+
+  const promptText = (options: {
+    heading: string
+    description?: string
+    label?: string
+    defaultValue?: string
+    confirmLabel?: string
+    multiline?: boolean
+  }) =>
+    new Promise<string | null>((resolve) => {
+      // Replace any in-flight prompt (should be rare).
+      textPromptResolver.current?.(null)
+      textPromptResolver.current = resolve
+      setTextPrompt({
+        heading: options.heading,
+        description: options.description,
+        label: options.label ?? 'Value',
+        confirmLabel: options.confirmLabel ?? 'Save',
+        multiline: options.multiline ?? false,
+        value: options.defaultValue ?? '',
+      })
+    })
+
+  useEffect(() => {
+    if (!textPrompt) return
+    const frame = window.requestAnimationFrame(() => {
+      textPromptInputRef.current?.focus()
+      textPromptInputRef.current?.select?.()
+    })
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeTextPrompt(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKey)
+    }
+    // Only when the dialog opens — not on every keystroke (that re-selects and overwrites).
+  }, [textPrompt?.heading, textPrompt?.label, textPrompt?.multiline])
+
   const onSaveAskToKnowledge = async (answer: string, question: string | null) => {
     const titleDefault =
       (question && question.trim().slice(0, 80)) ||
       answer.trim().split('\n')[0]?.slice(0, 80) ||
       'Captured ops knowledge'
-    const title = window.prompt('Title for shared knowledge', titleDefault)
+    const title = await promptText({
+      heading: 'Save to knowledge',
+      description:
+        'Queues an approval to add this Ask answer to shared org knowledge. Edit the title if you want.',
+      label: 'Title',
+      defaultValue: titleDefault,
+      confirmLabel: 'Queue for approval',
+    })
     if (title == null) return
     if (!title.trim() || !answer.trim()) return
 
@@ -1000,10 +1369,23 @@ export default function App() {
     setBusy(true)
     setError(null)
     try {
-      await Promise.all([refreshOpsHealth(), refreshAiStatus()])
-      setStatusBanner(`Ops + AI status checked · ${new Date().toLocaleString()}`)
+      await Promise.all([refreshOpsHealth(), refreshAiStatus(), refreshWhatsApp()])
+      setStatusBanner(`Ops + AI + WhatsApp status checked · ${new Date().toLocaleString()}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Status check failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onRefreshWhatsAppGaps = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await refreshWhatsApp()
+      setStatusBanner(`WhatsApp gaps refreshed · ${new Date().toLocaleString()}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'WhatsApp gaps failed')
     } finally {
       setBusy(false)
     }
@@ -1085,17 +1467,19 @@ export default function App() {
   const title =
     active === 'Ask'
       ? 'Ask ops'
-      : active === 'Open work'
-        ? 'Unified open work'
-        : active === 'Inbox'
-          ? 'Unified inbox'
-          : active === 'Tasks'
-            ? 'Tasks & reminders'
-            : active === 'Approvals'
-              ? 'Approvals'
-              : active === 'Admin'
-                ? 'Connectors & admin'
-                : active
+      : active === 'Knowledge'
+        ? 'Knowledge library'
+        : active === 'Open work'
+          ? 'Unified open work'
+          : active === 'Inbox'
+            ? 'Unified inbox'
+            : active === 'Tasks'
+              ? 'Tasks & reminders'
+              : active === 'Approvals'
+                ? 'Approvals'
+                : active === 'Admin'
+                  ? 'Connectors & admin'
+                  : active
 
   if (!session) {
     return (
@@ -1189,8 +1573,15 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
-      <aside className="rail">
+    <div className={['shell', navOpen ? 'nav-open' : ''].filter(Boolean).join(' ')}>
+      <button
+        type="button"
+        className="nav-backdrop"
+        aria-label="Close menu"
+        hidden={!navOpen}
+        onClick={() => setNavOpen(false)}
+      />
+      <aside className="rail" id="app-nav">
         <div className="brand">
           <BrandMark />
           <div>
@@ -1216,7 +1607,12 @@ export default function App() {
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => setActive(item)}
+                onClick={() => {
+                  setActive(item)
+                  setNavOpen(false)
+                  setAskHistoryOpen(false)
+                  if (item !== 'Inbox') setInboxComposeOpen(false)
+                }}
               >
                 <span>{item}</span>
                 {approvalCount > 0 && (
@@ -1229,22 +1625,54 @@ export default function App() {
             )
           })}
         </nav>
+        <div className="rail-footer">
+          <p className="rail-user">{userLabel}</p>
+          <span className={['pill', health.startsWith('ok') ? 'ok' : ''].filter(Boolean).join(' ')}>
+            {health}
+          </span>
+          <span className={['pill', connectedOutlook ? 'ok' : ''].filter(Boolean).join(' ')}>
+            {connectedOutlook ? 'Outlook connected' : 'Outlook off'}
+          </span>
+          <button type="button" className="sign-out" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
       </aside>
 
       <main className="stage">
         <header className="topbar">
-          <div>
+          <button
+            type="button"
+            className="menu-toggle"
+            aria-label="Open menu"
+            aria-expanded={navOpen}
+            aria-controls="app-nav"
+            onClick={() => setNavOpen(true)}
+          >
+            <span className="menu-toggle-bars" aria-hidden="true" />
+          </button>
+          <div className="topbar-titles">
             <p className="eyebrow">{active}</p>
             <h1>{title}</h1>
           </div>
           <div className="meta">
-            <span>{userLabel}</span>
-            <span className={connectedOutlook ? 'pill ok' : 'pill'}>
+            <span className="meta-user">{userLabel}</span>
+            <span
+              className={[
+                'meta-outlook',
+                'pill',
+                connectedOutlook ? 'ok' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
               {connectedOutlook
                 ? `Outlook · ${connectedOutlook.primaryAddress ?? 'connected'}`
                 : 'Outlook · not connected'}
             </span>
-            <span className={health.startsWith('ok') ? 'pill ok' : 'pill'}>{health}</span>
+            <span className={['meta-health', 'pill', health.startsWith('ok') ? 'ok' : ''].filter(Boolean).join(' ')}>
+              {health}
+            </span>
             <button type="button" className="sign-out" onClick={onLogout}>
               Sign out
             </button>
@@ -1284,13 +1712,34 @@ export default function App() {
 
         <div className="stage-scroll">
         {active === 'Ask' && (
-          <section className="ask-shell">
-            <aside className="ask-history">
+          <section
+            className={['ask-shell', askHistoryOpen ? 'ask-history-open' : '']
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {askHistoryOpen && (
+              <button
+                type="button"
+                className="ask-history-backdrop"
+                aria-label="Close chats"
+                onClick={() => setAskHistoryOpen(false)}
+              />
+            )}
+            <aside className="ask-history" id="ask-history-panel">
+              <div className="ask-history-sheet-bar">
+                <strong>Chats</strong>
+                <button type="button" className="ghost" onClick={() => setAskHistoryOpen(false)}>
+                  Done
+                </button>
+              </div>
               <button
                 type="button"
                 className="ask-new-chat"
                 disabled={overviewChatBusy}
-                onClick={onNewAskChat}
+                onClick={() => {
+                  onNewAskChat()
+                  setAskHistoryOpen(false)
+                }}
               >
                 New chat
               </button>
@@ -1307,7 +1756,10 @@ export default function App() {
                         type="button"
                         className="ask-history-open"
                         disabled={overviewChatBusy || busy}
-                        onClick={() => void onSelectAskSession(s.id)}
+                        onClick={() => {
+                          void onSelectAskSession(s.id)
+                          setAskHistoryOpen(false)
+                        }}
                         title={s.title}
                       >
                         <span className="ask-history-title">{s.title}</span>
@@ -1332,14 +1784,32 @@ export default function App() {
 
             <section className="ask-layout">
               <header className="ask-header">
-                <div>
+                <div className="ask-header-copy">
                   <h2>Ask</h2>
-                  <p className="muted">
+                  <p className="muted page-lede">
                     Live MaintainX / EZRentOut / Quotes / inventory for each question, plus knowledge
                     and prior Ask chats for learning. Quotes include line items and dollar amounts.
                   </p>
                 </div>
                 <div className="ask-header-actions">
+                  <button
+                    type="button"
+                    className="ghost ask-history-toggle"
+                    disabled={overviewChatBusy}
+                    aria-expanded={askHistoryOpen}
+                    aria-controls="ask-history-panel"
+                    onClick={() => setAskHistoryOpen((open) => !open)}
+                  >
+                    {askHistoryOpen ? 'Close' : 'Chats'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost ask-new-chat-inline"
+                    disabled={overviewChatBusy}
+                    onClick={onNewAskChat}
+                  >
+                    New
+                  </button>
                   <button
                     type="button"
                     className="ghost"
@@ -1445,13 +1915,44 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  overviewChat.map((turn, idx) => (
+                  overviewChat.map((turn, idx) => {
+                    const parsed =
+                      turn.role === 'assistant'
+                        ? parseKnowledgeSourcesFromContent(turn.content)
+                        : { display: turn.content, sources: [] as KnowledgeSource[] }
+                    const sources =
+                      turn.knowledgeSources && turn.knowledgeSources.length > 0
+                        ? turn.knowledgeSources
+                        : parsed.sources
+                    return (
                     <div
                       key={`${turn.role}-${idx}`}
                       className={`overview-chat-bubble ${turn.role === 'user' ? 'is-user' : 'is-assistant'}`}
                     >
                       <span className="overview-chat-role">{turn.role === 'user' ? 'You' : 'Palantir'}</span>
-                      <pre>{turn.content}</pre>
+                      <pre>{parsed.display}</pre>
+                      {turn.role === 'assistant' && sources.length > 0 && (
+                        <div className="ask-knowledge-sources">
+                          <span className="muted ask-knowledge-sources-label">Source documents</span>
+                          {sources.map((src) => (
+                            <button
+                              key={src.documentId}
+                              type="button"
+                              className="ghost ask-knowledge-download"
+                              disabled={busy || overviewChatBusy}
+                              onClick={() =>
+                                openKnowledgePreview({
+                                  documentId: src.documentId,
+                                  title: src.title,
+                                  fileName: src.fileName,
+                                })
+                              }
+                            >
+                              Preview · {src.title}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {turn.role === 'assistant' && (
                         <div className="actions" style={{ marginTop: '0.5rem' }}>
                           <button
@@ -1462,7 +1963,7 @@ export default function App() {
                               const prior = [...overviewChat.slice(0, idx)]
                                 .reverse()
                                 .find((t) => t.role === 'user')
-                              void onSaveAskToKnowledge(turn.content, prior?.content ?? null)
+                              void onSaveAskToKnowledge(parsed.display, prior?.content ?? null)
                             }}
                           >
                             Save to knowledge
@@ -1470,7 +1971,8 @@ export default function App() {
                         </div>
                       )}
                     </div>
-                  ))
+                    )
+                  })
                 )}
                 {overviewChatBusy && (
                   <div className="ask-thinking" role="status" aria-live="polite">
@@ -1507,16 +2009,27 @@ export default function App() {
               >
                 {askPendingFiles.length > 0 && (
                   <div className="ask-attach-chips">
-                    {askPendingFiles.map((file, idx) => (
-                      <span key={`${file.name}-${idx}`} className="ask-attach-chip">
-                        {file.name}
+                    {askPendingFiles.map((file) => (
+                      <span key={file.localKey} className="ask-attach-chip">
+                        {file.fileName}
+                        <span className="muted" style={{ marginLeft: '0.35rem' }}>
+                          {file.status === 'uploading'
+                            ? 'uploading…'
+                            : askExtractPending(file.status)
+                              ? 'extracting…'
+                              : file.status === 'error'
+                                ? 'failed'
+                                : file.status.toLowerCase()}
+                        </span>
                         <button
                           type="button"
                           className="ghost"
                           disabled={overviewChatBusy}
-                          aria-label={`Remove ${file.name}`}
+                          aria-label={`Remove ${file.fileName}`}
                           onClick={() =>
-                            setAskPendingFiles((prev) => prev.filter((_, i) => i !== idx))
+                            setAskPendingFiles((prev) =>
+                              prev.filter((c) => c.localKey !== file.localKey),
+                            )
                           }
                         >
                           ×
@@ -1530,7 +2043,7 @@ export default function App() {
                     ref={askFileInputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.md,.csv,.json,.log,.xml,.html,.htm,text/*,application/pdf,application/json"
+                    accept=".pdf,.txt,.md,.csv,.json,.log,.xml,.html,.htm,.zip,text/*,application/pdf,application/json,application/zip"
                     hidden
                     onChange={(e) => onAskFilesChosen(e.target.files)}
                   />
@@ -1538,7 +2051,7 @@ export default function App() {
                     type="button"
                     className="ghost ask-attach-btn"
                     disabled={overviewChatBusy || askPendingFiles.length >= 5}
-                    title="Attach a file for Ask to review (PDF / text). Say “add to knowledge” to save it."
+                    title="Attach PDF, text, or zip (up to 4 GB) for Ask to review. Say “add to knowledge” to save it."
                     onClick={() => askFileInputRef.current?.click()}
                   >
                     Attach
@@ -1560,6 +2073,7 @@ export default function App() {
                     type="submit"
                     disabled={
                       overviewChatBusy ||
+                      askPendingFiles.some((f) => f.status === 'uploading' || f.status === 'error') ||
                       (!overviewChatDraft.trim() && askPendingFiles.length === 0)
                     }
                   >
@@ -1567,8 +2081,8 @@ export default function App() {
                   </button>
                 </div>
                 <p className="muted ask-attach-hint">
-                  Attach PDF/text for review. Say “add to knowledge” to save attached files into org
-                  knowledge.
+                  Attach PDF, text, or zip (up to 4 GB). Upload acknowledges immediately; text extract
+                  runs in the background. Say “add to knowledge” to save into org knowledge.
                 </p>
               </form>
             </section>
@@ -1579,8 +2093,8 @@ export default function App() {
           <section className="open-work">
             <div className="panel open-work-toolbar">
               <div>
-                <h2>All sources</h2>
-                <p className="muted">
+                <h2 className="page-section-title">All sources</h2>
+                <p className="muted page-lede">
                   MaintainX (both orgs), EZRentOut, and Monday — normalized into one list. Defaults to
                   physical MaintainX work (hides On hold). Use Comment / Update to queue an
                   approval-gated write-back.
@@ -1589,8 +2103,8 @@ export default function App() {
                     : ''}
                 </p>
               </div>
-              <button type="button" onClick={() => void onRefreshOpenWork()} disabled={busy}>
-                {busy ? 'Refreshing…' : 'Refresh'}
+              <button type="button" onClick={() => void onRefreshOpenWork()} disabled={busy || openWorkLoading}>
+                {busy || openWorkLoading ? 'Refreshing…' : 'Refresh'}
               </button>
             </div>
 
@@ -1712,7 +2226,9 @@ export default function App() {
             )}
 
             <div className="list">
-              {filteredOpenWork.length === 0 ? (
+              {!openWorkReady ? (
+                <PanelWorking label="Loading open work" />
+              ) : filteredOpenWork.length === 0 ? (
                 <div className="empty">
                   <h2>No open work</h2>
                   <p>
@@ -1780,10 +2296,43 @@ export default function App() {
         )}
 
         {active === 'Inbox' && (
-          <section className="inbox-layout">
+          <section
+            className={[
+              'inbox-layout',
+              selectedId ? 'inbox-show-thread' : 'inbox-show-list',
+            ].join(' ')}
+          >
             <div className="inbox-list">
               <div className="inbox-toolbar">
-                <form className="composer" onSubmit={onCreate}>
+                <div className="inbox-toolbar-actions">
+                  <button
+                    type="button"
+                    className="ghost inbox-compose-toggle"
+                    onClick={() => setInboxComposeOpen((v) => !v)}
+                    aria-expanded={inboxComposeOpen}
+                  >
+                    {inboxComposeOpen ? 'Cancel' : 'New conversation'}
+                  </button>
+                  {connectedOutlook && (
+                    <button
+                      type="button"
+                      className="sync-btn"
+                      onClick={() => void onSyncOutlook()}
+                      disabled={busy}
+                    >
+                      {busy ? 'Syncing…' : 'Sync Outlook'}
+                    </button>
+                  )}
+                </div>
+                <form
+                  className={['composer', 'inbox-compose', inboxComposeOpen ? 'open' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                  onSubmit={(e) => {
+                    void onCreate(e)
+                    setInboxComposeOpen(false)
+                  }}
+                >
                   <input
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
@@ -1791,19 +2340,9 @@ export default function App() {
                     aria-label="Conversation subject"
                   />
                   <button type="submit" disabled={busy}>
-                    {busy ? 'Creating…' : 'New'}
+                    {busy ? 'Creating…' : 'Create'}
                   </button>
                 </form>
-                {connectedOutlook && (
-                  <button
-                    type="button"
-                    className="sync-btn"
-                    onClick={() => void onSyncOutlook()}
-                    disabled={busy}
-                  >
-                    {busy ? 'Syncing…' : 'Sync Outlook'}
-                  </button>
-                )}
               </div>
 
               <div className="list">
@@ -1812,7 +2351,7 @@ export default function App() {
                     <h2>Inbox is empty</h2>
                     <p>
                       {connectedOutlook
-                        ? 'Click Sync Outlook above to pull in pilot mail, or start a local conversation.'
+                        ? 'Sync Outlook to pull in pilot mail, or start a local conversation.'
                         : 'Connect Outlook in Admin, then Sync Outlook here to load pilot mail.'}
                     </p>
                   </div>
@@ -1831,7 +2370,12 @@ export default function App() {
                         </p>
                       </div>
                       <time dateTime={item.updatedAt}>
-                        {new Date(item.updatedAt).toLocaleString()}
+                        {new Date(item.updatedAt).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
                       </time>
                     </button>
                   ))
@@ -1841,14 +2385,21 @@ export default function App() {
 
             <div className="thread">
               {!selected ? (
-                <div className="empty">
+                <div className="empty inbox-thread-placeholder">
                   <h2>Select a conversation</h2>
                   <p>Messages, internal notes, and claim/release live here.</p>
                 </div>
               ) : (
                 <>
                   <div className="thread-header">
-                    <div>
+                    <button
+                      type="button"
+                      className="ghost thread-back"
+                      onClick={() => setSelectedId(null)}
+                    >
+                      ← Inbox
+                    </button>
+                    <div className="thread-heading">
                       <h2>{selected.subject || 'Untitled conversation'}</h2>
                       <p>{assigneeLabel(selected, currentUserId)}</p>
                     </div>
@@ -1859,7 +2410,7 @@ export default function App() {
                         onClick={() => setThreadSort(!threadSortNewestFirst)}
                         title="Toggle message order"
                       >
-                        {threadSortNewestFirst ? 'Newest first' : 'Oldest first'}
+                        {threadSortNewestFirst ? 'Newest' : 'Oldest'}
                       </button>
                       <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
                         Summarize
@@ -2062,6 +2613,200 @@ export default function App() {
           </section>
         )}
 
+        {active === 'Knowledge' && (
+          <section className="knowledge">
+            <div className="panel knowledge-panel">
+              <div className="knowledge-toolbar">
+                <div className="knowledge-toolbar-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setKnowledgeUploadOpen(true)}
+                    disabled={!knowledgeStatus?.storageConfigured}
+                  >
+                    Upload
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void refreshKnowledge()}
+                    disabled={busy || knowledgeLoading}
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+              <p className="muted page-lede knowledge-lede">
+                Upload playbooks, diagrams, PDFs, and PLC programs. Files are stored immediately;
+                text/PDF/image indexing continues in the background. Docs are auto-sorted into
+                collections. Multi-file or .zip (up to 4 GB per file / 4 GB zip).
+              </p>
+              {!knowledgeReady ? (
+                <PanelWorking label="Loading knowledge" />
+              ) : !knowledgeStatus?.storageConfigured ? (
+                <PanelWorking label="Waiting for storage" />
+              ) : knowledgeDocs.length === 0 ? (
+                <div className="empty knowledge-empty">
+                  <h2>No documents yet</h2>
+                  <p>Upload playbooks, PDFs, diagrams, or PLC programs to get started.</p>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setKnowledgeUploadOpen(true)}
+                    disabled={!knowledgeStatus?.storageConfigured}
+                  >
+                    Upload files
+                  </button>
+                </div>
+              ) : (
+                <div className="knowledge-browse">
+                  <div className="knowledge-browse-toolbar">
+                    <MenuSelect
+                      label="Collection"
+                      value={knowledgeBrowseCollection}
+                      onChange={(next) => {
+                        setKnowledgeBrowseCollection(next)
+                        setKnowledgeBrowseFolder('all')
+                      }}
+                      options={[
+                        {
+                          value: 'all',
+                          label: `All (${(knowledgeLibrary?.documents ?? knowledgeDocs).filter((d) => d.status !== 'Duplicate').length})`,
+                        },
+                        ...(knowledgeLibrary?.collections ?? []).map((c) => ({
+                          value: c.name,
+                          label: `${c.name} (${c.documentCount})`,
+                        })),
+                      ]}
+                    />
+                    <MenuSelect
+                      label="Folder"
+                      value={knowledgeBrowseFolder}
+                      disabled={knowledgeBrowseCollection === 'all'}
+                      onChange={setKnowledgeBrowseFolder}
+                      options={[
+                        { value: 'all', label: 'All folders' },
+                        { value: '__root__', label: '(collection root)' },
+                        ...(
+                          knowledgeLibrary?.collections.find(
+                            (c) => c.name === knowledgeBrowseCollection,
+                          )?.folders ?? []
+                        ).map((f) => ({ value: f, label: f })),
+                      ]}
+                    />
+                    <label className="knowledge-browse-search">
+                      Filter
+                      <input
+                        value={knowledgeBrowseQuery}
+                        onChange={(e) => setKnowledgeBrowseQuery(e.target.value)}
+                        placeholder="Title, file, tags…"
+                      />
+                    </label>
+                  </div>
+
+                  {(() => {
+                    const source = knowledgeLibrary?.documents ?? knowledgeDocs
+                    const q = knowledgeBrowseQuery.trim().toLowerCase()
+                    const filtered = source.filter((doc) => {
+                      if (doc.status === 'Duplicate') return false
+                      if (
+                        knowledgeBrowseCollection !== 'all' &&
+                        (doc.collection || 'General') !== knowledgeBrowseCollection
+                      ) {
+                        return false
+                      }
+                      if (knowledgeBrowseCollection !== 'all' && knowledgeBrowseFolder !== 'all') {
+                        const folder = doc.folderPath || ''
+                        if (knowledgeBrowseFolder === '__root__') {
+                          if (folder) return false
+                        } else if (folder !== knowledgeBrowseFolder) {
+                          return false
+                        }
+                      }
+                      if (!q) return true
+                      const hay = `${doc.title} ${doc.fileName} ${doc.tags || ''} ${doc.collection || ''} ${doc.folderPath || ''}`.toLowerCase()
+                      return hay.includes(q)
+                    })
+
+                    if (filtered.length === 0) {
+                      return (
+                        <p className="muted" style={{ marginTop: '0.75rem' }}>
+                          No documents in this view.
+                        </p>
+                      )
+                    }
+
+                    let lastGroup = ''
+                    return (
+                      <ul className="ops-health-list knowledge-browse-list">
+                        {filtered.map((doc) => {
+                          const group = `${doc.collection || 'General'}${doc.folderPath ? ` / ${doc.folderPath}` : ''}`
+                          const showHeading = group !== lastGroup
+                          lastGroup = group
+                          return (
+                            <li key={doc.id} className="knowledge-browse-item">
+                              {showHeading && (
+                                <div className="knowledge-browse-group">{group}</div>
+                              )}
+                              <div className="knowledge-browse-row">
+                                <span
+                                  className={
+                                    doc.status === 'Indexed'
+                                      ? 'pill ok'
+                                      : doc.status === 'Queued' || doc.status === 'Indexing'
+                                        ? 'pill warn'
+                                        : doc.status === 'IndexFailed'
+                                          ? 'pill danger'
+                                          : 'pill'
+                                  }
+                                >
+                                  {doc.status === 'Indexing' ? 'Indexing…' : doc.status}
+                                </span>
+                                <div>
+                                  <strong>{doc.title}</strong>
+                                  <p className="muted">
+                                    {doc.fileName} · {formatBytes(doc.byteSize)}
+                                    {doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
+                                    {doc.indexError ? ` — ${doc.indexError}` : ''}
+                                  </p>
+                                </div>
+                                <div className="actions" style={{ display: 'flex', gap: '0.4rem' }}>
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() =>
+                                      openKnowledgePreview({
+                                        documentId: doc.id,
+                                        title: doc.title,
+                                        fileName: doc.fileName,
+                                      })
+                                    }
+                                    disabled={busy}
+                                  >
+                                    Preview
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() => void onDeleteKnowledge(doc.id)}
+                                    disabled={busy}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )
+                  })()}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {active === 'Admin' && (
           <section className="admin">
             <div className="panel">
@@ -2233,150 +2978,120 @@ export default function App() {
                 <div>
                   <h2>Knowledge</h2>
                   <p>
-                    Upload playbooks, diagrams, PDFs, and PLC programs to Azure Blob{' '}
-                    <code>knowledge</code>. Files are stored immediately; text/PDF/image indexing
-                    continues in the background. Capture Ask answers via{' '}
-                    <em>Save to knowledge</em> (approval-gated).
+                    Browse, upload, and preview org knowledge from the{' '}
+                    <button
+                      type="button"
+                      className="ghost"
+                      style={{ padding: '0 0.15rem', verticalAlign: 'baseline' }}
+                      onClick={() => setActive('Knowledge')}
+                    >
+                      Knowledge
+                    </button>{' '}
+                    tab — collections, folders, and Ask source previews live there.
                   </p>
                 </div>
-                <button type="button" className="ghost" onClick={() => void refreshKnowledge()} disabled={busy}>
-                  Refresh
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void refreshKnowledge()}
+                  disabled={busy || knowledgeLoading}
+                >
+                  {knowledgeLoading ? 'Checking…' : 'Check storage'}
                 </button>
               </div>
               <p className="muted" style={{ marginTop: '0.75rem' }}>
                 Storage:{' '}
-                {knowledgeStatus?.storageConfigured ? (
+                {knowledgeStatus == null && !knowledgeReady ? (
+                  <span className="pill">Unknown</span>
+                ) : knowledgeStatus?.storageConfigured ? (
                   <span className="pill ok">Configured · {knowledgeStatus.container}</span>
                 ) : (
                   <span className="pill warn">Not configured</span>
                 )}
-                {' · '}
-                Index PDF, text, and images in the background after upload; store PLC (.acd, .l5x, …).
-                Multi-file or .zip (up to 4 GB per file / 4 GB zip)
               </p>
-              <form
-                className="knowledge-upload"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  const input = e.currentTarget.elements.namedItem('knowledgeFile') as HTMLInputElement
-                  void onUploadKnowledge(input.files)
-                  input.value = ''
-                }}
-              >
-                <label>
-                  Title (optional)
-                  <input
-                    value={knowledgeTitle}
-                    onChange={(e) => setKnowledgeTitle(e.target.value)}
-                    placeholder="e.g. Shop safety checklist — or batch / zip prefix"
-                  />
-                </label>
-                <label>
-                  Files
-                  <input
-                    name="knowledgeFile"
-                    type="file"
-                    multiple
-                    accept=".txt,.md,.csv,.json,.html,.htm,.log,.xml,.pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.acd,.l5x,.l5k,.rss,.st,.scl,.awl,.zip,application/pdf,application/zip,image/*"
-                    required
-                  />
-                </label>
-                <button type="submit" disabled={busy || !knowledgeStatus?.storageConfigured}>
-                  {busy && uploadProgress
-                    ? uploadProgress.processing
-                      ? 'Processing…'
-                      : `Uploading ${Math.round(uploadProgress.percent)}%`
-                    : busy
-                      ? 'Uploading…'
-                      : 'Upload'}
-                </button>
-              </form>
-              {uploadProgress && (
-                <div
-                  className="upload-progress"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(uploadProgress.percent)}
-                  aria-label={
-                    uploadProgress.processing
-                      ? 'Processing upload on server'
-                      : 'Uploading knowledge files'
-                  }
-                >
-                  <div className="upload-progress-meta">
-                    <strong>
-                      {uploadProgress.processing
-                        ? 'Indexing on server…'
-                        : `Uploading ${uploadProgress.fileLabel}`}
-                    </strong>
-                    <span>
-                      {uploadProgress.processing
-                        ? 'Stored — finishing request'
-                        : [
-                            `${Math.round(uploadProgress.percent)}%`,
-                            `${formatBytes(uploadProgress.loaded)} / ${formatBytes(uploadProgress.total)}`,
-                            formatEta(uploadProgress.etaSeconds),
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                    </span>
-                  </div>
-                  <div
-                    className={[
-                      'upload-progress-track',
-                      uploadProgress.processing ? 'indeterminate' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                  >
-                    <div
-                      className="upload-progress-fill"
-                      style={
-                        uploadProgress.processing
-                          ? undefined
-                          : { width: `${Math.max(2, Math.min(100, uploadProgress.percent))}%` }
-                      }
-                    />
-                  </div>
+            </div>
+
+            <div className="panel" style={{ marginTop: '1rem' }}>
+              <div className="admin-panel-header">
+                <div>
+                  <h2>WhatsApp bridge</h2>
+                  <p>
+                    Read-only ingest of existing internal WhatsApp groups via WAHA (no org process
+                    change). Threads appear in Inbox as channel WhatsApp; gaps cross-check open
+                    MaintainX / Monday / EZRentOut. Setup: <code>connectors/WhatsApp/README.md</code>
+                  </p>
                 </div>
-              )}
-              {knowledgeDocs.length === 0 ? (
-                <p className="muted" style={{ marginTop: '1rem' }}>
-                  No knowledge documents yet.
+                <button type="button" className="ghost" onClick={() => void onRefreshWhatsAppGaps()} disabled={busy}>
+                  {busy ? 'Checking…' : 'Refresh gaps'}
+                </button>
+              </div>
+              <p className="muted" style={{ marginTop: '0.75rem' }}>
+                {whatsAppStatus ? (
+                  <>
+                    <span
+                      className={
+                        whatsAppStatus.configured
+                          ? 'pill ok'
+                          : whatsAppStatus.enabled
+                            ? 'pill warn'
+                            : 'pill'
+                      }
+                    >
+                      {whatsAppStatus.configured
+                        ? 'Configured'
+                        : whatsAppStatus.enabled
+                          ? 'Needs secret'
+                          : 'Disabled'}
+                    </span>{' '}
+                    {whatsAppStatus.instanceName} · {whatsAppStatus.detail}
+                  </>
+                ) : (
+                  'Status not loaded yet.'
+                )}
+              </p>
+              {whatsAppGaps.length === 0 ? (
+                <p className="muted" style={{ marginTop: '0.75rem' }}>
+                  No WhatsApp threads ingested yet — start WAHA, join groups, wait for messages.
                 </p>
               ) : (
-                <ul className="ops-health-list" style={{ marginTop: '1rem' }}>
-                  {knowledgeDocs.map((doc) => (
-                    <li key={doc.id}>
+                <ul className="ops-health-list" style={{ marginTop: '0.75rem' }}>
+                  {whatsAppGaps.slice(0, 40).map((g) => (
+                    <li key={g.conversationId}>
                       <span
                         className={
-                          doc.status === 'Indexed'
+                          g.matchStatus === 'Linked'
                             ? 'pill ok'
-                            : doc.status === 'Queued' || doc.status === 'Indexing'
+                            : g.matchStatus === 'Partial'
                               ? 'pill warn'
-                              : doc.status === 'IndexFailed'
-                                ? 'pill danger'
-                                : 'pill'
+                              : 'pill danger'
                         }
                       >
-                        {doc.status === 'Indexing' ? 'Indexing…' : doc.status}
+                        {g.matchStatus}
                       </span>
                       <div>
-                        <strong>{doc.title}</strong>
+                        <strong>{g.subject}</strong>
                         <p className="muted">
-                          {doc.fileName} · {formatBytes(doc.byteSize)}
-                          {doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
-                          {doc.indexError ? ` — ${doc.indexError}` : ''}
+                          {g.latestSnippet || '—'}
+                          {g.extractedHints.length > 0
+                            ? ` · hints: ${g.extractedHints.slice(0, 6).join(', ')}`
+                            : ''}
+                          {g.matches.length > 0
+                            ? ` · ops: ${g.matches
+                                .slice(0, 3)
+                                .map((m) => `${m.sourceSystem} ${m.title}`)
+                                .join('; ')}`
+                            : ''}
                         </p>
                       </div>
                       <button
                         type="button"
                         className="ghost"
-                        onClick={() => void onDeleteKnowledge(doc.id)}
-                        disabled={busy}
+                        onClick={() => {
+                          setActive('Inbox')
+                          setSelectedId(g.conversationId)
+                        }}
                       >
-                        Delete
+                        Open
                       </button>
                     </li>
                   ))}
@@ -2529,6 +3244,311 @@ export default function App() {
         )}
         </div>
       </main>
+
+      {knowledgeUploadOpen && (
+        <div
+          className="app-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !uploadProgress) {
+              setKnowledgeUploadOpen(false)
+            }
+          }}
+        >
+          <div
+            className="app-modal knowledge-upload-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledge-upload-title"
+          >
+            <div className="knowledge-upload-modal-header">
+              <div>
+                <h2 id="knowledge-upload-title">Upload knowledge</h2>
+                <p className="muted">
+                  PDF, text, images, PLC programs, or .zip (up to 4 GB). Indexing runs in the
+                  background after upload.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                disabled={!!uploadProgress}
+                onClick={() => setKnowledgeUploadOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <form
+              className="knowledge-upload"
+              onSubmit={(e) => {
+                e.preventDefault()
+                const input = e.currentTarget.elements.namedItem('knowledgeFile') as HTMLInputElement
+                void onUploadKnowledge(input.files)
+                input.value = ''
+              }}
+            >
+              <label className="app-modal-field">
+                <span>Title (optional)</span>
+                <input
+                  value={knowledgeTitle}
+                  onChange={(e) => setKnowledgeTitle(e.target.value)}
+                  placeholder="e.g. Shop safety checklist — or batch / zip prefix"
+                  disabled={!!uploadProgress}
+                />
+              </label>
+              <label className="app-modal-field">
+                <span>Files</span>
+                <input
+                  name="knowledgeFile"
+                  type="file"
+                  multiple
+                  accept=".txt,.md,.csv,.json,.html,.htm,.log,.xml,.pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.acd,.l5x,.l5k,.rss,.st,.scl,.awl,.zip,application/pdf,application/zip,image/*"
+                  required
+                  disabled={!!uploadProgress}
+                />
+              </label>
+              {uploadProgress && (
+                <div
+                  className="upload-progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(uploadProgress.percent)}
+                  aria-label={
+                    uploadProgress.processing
+                      ? 'Processing upload on server'
+                      : 'Uploading knowledge files'
+                  }
+                >
+                  <div className="upload-progress-meta">
+                    <strong>
+                      {uploadProgress.processing
+                        ? 'Indexing on server…'
+                        : `Uploading ${uploadProgress.fileLabel}`}
+                    </strong>
+                    <span>
+                      {uploadProgress.processing
+                        ? 'Stored — finishing request'
+                        : [
+                            `${Math.round(uploadProgress.percent)}%`,
+                            `${formatBytes(uploadProgress.loaded)} / ${formatBytes(uploadProgress.total)}`,
+                            formatEta(uploadProgress.etaSeconds),
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                    </span>
+                  </div>
+                  <div
+                    className={[
+                      'upload-progress-track',
+                      uploadProgress.processing ? 'indeterminate' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    <div
+                      className="upload-progress-fill"
+                      style={
+                        uploadProgress.processing
+                          ? undefined
+                          : { width: `${Math.max(2, Math.min(100, uploadProgress.percent))}%` }
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="app-modal-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!!uploadProgress}
+                  onClick={() => setKnowledgeUploadOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={busy || !knowledgeStatus?.storageConfigured}>
+                  {busy && uploadProgress
+                    ? uploadProgress.processing
+                      ? 'Processing…'
+                      : `Uploading ${Math.round(uploadProgress.percent)}%`
+                    : busy
+                      ? 'Uploading…'
+                      : 'Upload'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {knowledgePreview && (
+        <div
+          className="app-modal-backdrop knowledge-preview-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeKnowledgePreview()
+          }}
+        >
+          <div
+            className="app-modal knowledge-preview-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledge-preview-title"
+          >
+            <div className="knowledge-preview-header">
+              <div>
+                <h2 id="knowledge-preview-title">{knowledgePreview.title}</h2>
+                <p className="muted">{knowledgePreview.fileName}</p>
+              </div>
+              <button type="button" className="ghost" onClick={closeKnowledgePreview}>
+                Close
+              </button>
+            </div>
+            <div className="knowledge-preview-body">
+              {knowledgePreview.loading && <p className="muted">Loading preview…</p>}
+              {!knowledgePreview.loading && knowledgePreview.error && (
+                <p className="error">{knowledgePreview.error}</p>
+              )}
+              {!knowledgePreview.loading && !knowledgePreview.error && knowledgePreview.objectUrl && (
+                <>
+                  {(() => {
+                    const type = (knowledgePreview.contentType || '').toLowerCase()
+                    const name = knowledgePreview.fileName.toLowerCase()
+                    const isPdf = type.includes('pdf') || name.endsWith('.pdf')
+                    const isImage =
+                      type.startsWith('image/') ||
+                      /\.(png|jpe?g|gif|webp|bmp)$/i.test(name)
+                    if (isPdf) {
+                      return (
+                        <iframe
+                          className="knowledge-preview-frame"
+                          title={knowledgePreview.title}
+                          src={knowledgePreview.objectUrl}
+                        />
+                      )
+                    }
+                    if (isImage) {
+                      return (
+                        <img
+                          className="knowledge-preview-image"
+                          src={knowledgePreview.objectUrl}
+                          alt={knowledgePreview.title}
+                        />
+                      )
+                    }
+                    if (knowledgePreview.textPreview != null) {
+                      return (
+                        <pre className="knowledge-preview-text">{knowledgePreview.textPreview}</pre>
+                      )
+                    }
+                    return (
+                      <p className="muted">
+                        No inline preview for this file type. Use Download to save and open it
+                        locally.
+                      </p>
+                    )
+                  })()}
+                </>
+              )}
+            </div>
+            <div className="app-modal-actions knowledge-preview-actions">
+              <button type="button" className="ghost" onClick={closeKnowledgePreview}>
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={
+                  knowledgePreview.loading ||
+                  !!knowledgePreview.error ||
+                  !knowledgePreview.objectUrl
+                }
+                onClick={() => {
+                  void downloadKnowledgeFile(
+                    knowledgePreview.documentId,
+                    knowledgePreview.fileName,
+                  ).catch((err) =>
+                    setError(
+                      err instanceof Error ? err.message : 'Could not download knowledge file',
+                    ),
+                  )
+                }}
+              >
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {textPrompt && (
+        <div
+          className="app-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeTextPrompt(null)
+          }}
+        >
+          <div
+            className="app-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="app-text-prompt-title"
+          >
+            <h2 id="app-text-prompt-title">{textPrompt.heading}</h2>
+            {textPrompt.description && <p className="muted">{textPrompt.description}</p>}
+            <label className="app-modal-field">
+              <span>{textPrompt.label}</span>
+              {textPrompt.multiline ? (
+                <textarea
+                  ref={(el) => {
+                    textPromptInputRef.current = el
+                  }}
+                  rows={5}
+                  value={textPrompt.value}
+                  onChange={(e) =>
+                    setTextPrompt((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault()
+                      closeTextPrompt(textPrompt.value)
+                    }
+                  }}
+                />
+              ) : (
+                <input
+                  ref={(el) => {
+                    textPromptInputRef.current = el
+                  }}
+                  type="text"
+                  value={textPrompt.value}
+                  onChange={(e) =>
+                    setTextPrompt((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      closeTextPrompt(textPrompt.value)
+                    }
+                  }}
+                />
+              )}
+            </label>
+            <div className="app-modal-actions">
+              <button type="button" className="ghost" onClick={() => closeTextPrompt(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!textPrompt.value.trim()}
+                onClick={() => closeTextPrompt(textPrompt.value)}
+              >
+                {textPrompt.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -10,7 +10,7 @@ namespace Palantir.Api.Controllers;
 [Route("ask")]
 public sealed class AskController : ControllerBase
 {
-    private const long MaxAskUploadBytes = 64L * 1024 * 1024;
+    private const long MaxAskUploadBytes = 4L * 1024 * 1024 * 1024;
 
     private readonly IAskHistoryService _ask;
     private readonly IAskAttachmentService _attachments;
@@ -80,6 +80,29 @@ public sealed class AskController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    [HttpGet("attachments")]
+    public async Task<ActionResult<IReadOnlyList<AskAttachmentDto>>> ListAttachments(
+        [FromQuery] List<Guid>? ids,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null || _currentUser.UserId is null)
+        {
+            return Unauthorized();
+        }
+
+        if (ids is null || ids.Count == 0)
+        {
+            return BadRequest(new { error = "Pass one or more attachment ids." });
+        }
+
+        var result = await _attachments.GetAsync(
+            _currentUser.OrganizationId.Value,
+            _currentUser.UserId.Value,
+            ids,
+            cancellationToken);
+        return Ok(result);
     }
 
     [HttpPost("attachments")]

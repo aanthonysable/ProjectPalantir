@@ -6,11 +6,13 @@ using Palantir.Application.Abstractions;
 using Palantir.Application.Ai;
 using Palantir.Application.Audit;
 using Palantir.Application.Auth;
+using Palantir.Application.Ask;
 using Palantir.Application.Azure;
 using Palantir.Application.Connectors;
 using Palantir.Application.Knowledge;
 using Palantir.Application.Overview;
 using Palantir.Infrastructure.Ai;
+using Palantir.Infrastructure.Ask;
 using Palantir.Infrastructure.Connectors;
 using Palantir.Infrastructure.Knowledge;
 using Palantir.Infrastructure.Overview;
@@ -49,6 +51,8 @@ public static class InfrastructureServiceCollectionExtensions
             configuration.GetSection(EZRentOutOptions.SectionName));
         services.Configure<MondayOptions>(
             configuration.GetSection(MondayOptions.SectionName));
+        services.Configure<WhatsAppBridgeOptions>(
+            configuration.GetSection(WhatsAppBridgeOptions.SectionName));
         services.Configure<AiOptions>(configuration.GetSection(AiOptions.SectionName));
         services.Configure<OpsSnapshotOptions>(configuration.GetSection(OpsSnapshotOptions.SectionName));
         services.Configure<PilotJwtOptions>(configuration.GetSection(PilotJwtOptions.SectionName));
@@ -88,6 +92,11 @@ public static class InfrastructureServiceCollectionExtensions
         });
         services.AddSingleton<IKnowledgeIndexQueue, KnowledgeIndexQueue>();
         services.AddHostedService<KnowledgeIndexBackgroundService>();
+        services.AddHostedService<KnowledgeDuplicateScanBackgroundService>();
+        services.AddSingleton<AskAttachmentExtractQueue>();
+        services.AddSingleton<IAskAttachmentExtractQueue>(sp =>
+            sp.GetRequiredService<AskAttachmentExtractQueue>());
+        services.AddHostedService<AskAttachmentExtractBackgroundService>();
         services.AddHostedService<OpsSnapshotRefreshBackgroundService>();
 
         return services;

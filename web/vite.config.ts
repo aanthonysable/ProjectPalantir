@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5251',
+        target: 'http://127.0.0.1:5251',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
         // Large knowledge uploads (multi-GB PLC / zip)
@@ -15,7 +15,7 @@ export default defineConfig({
         proxyTimeout: 0,
       },
       '/hubs': {
-        target: 'http://localhost:5251',
+        target: 'http://127.0.0.1:5251',
         ws: true,
         changeOrigin: true,
       },

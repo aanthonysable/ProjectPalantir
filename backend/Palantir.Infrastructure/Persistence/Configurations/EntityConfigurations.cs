@@ -249,10 +249,18 @@ public sealed class KnowledgeDocumentConfiguration : IEntityTypeConfiguration<Kn
         builder.Property(x => x.BlobPath).HasMaxLength(500).IsRequired();
         builder.Property(x => x.Status).HasMaxLength(40).IsRequired();
         builder.Property(x => x.IndexError).HasMaxLength(500);
+        builder.Property(x => x.Tags).HasMaxLength(800);
+        builder.Property(x => x.Collection).HasMaxLength(120).IsRequired();
+        builder.Property(x => x.FolderPath).HasMaxLength(260);
+        builder.Property(x => x.ContentHash).HasMaxLength(64);
+        builder.HasIndex(x => new { x.OrganizationId, x.ContentHash });
+        builder.HasIndex(x => new { x.OrganizationId, x.Collection, x.FolderPath });
         builder.HasIndex(x => new { x.OrganizationId, x.CreatedAt });
         builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId)
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(x => x.UploadedByUser).WithMany().HasForeignKey(x => x.UploadedByUserId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne<KnowledgeDocument>().WithMany().HasForeignKey(x => x.DuplicateOfDocumentId)
             .OnDelete(DeleteBehavior.NoAction);
     }
 }

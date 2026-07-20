@@ -46,6 +46,19 @@ public sealed class KnowledgeController : ControllerBase
         return Ok(items);
     }
 
+    /// <summary>Browsable library: collections + intelligently sorted documents.</summary>
+    [HttpGet("library")]
+    public async Task<ActionResult<KnowledgeLibraryDto>> Library(CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null)
+        {
+            return BadRequest("Organization id is required.");
+        }
+
+        var library = await _knowledge.GetLibraryAsync(_currentUser.OrganizationId.Value, cancellationToken);
+        return Ok(library);
+    }
+
     // Allow multi-GB PLC programs / archives (matches Kestrel + FormOptions in Program.cs).
     private const long MaxUploadBytes = 4L * 1024 * 1024 * 1024;
 
@@ -178,6 +191,30 @@ public sealed class KnowledgeController : ControllerBase
         {
             await _knowledge.DeleteAsync(_currentUser.OrganizationId.Value, documentId, cancellationToken);
             return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Download the original uploaded knowledge file (PDF, etc.).</summary>
+    [HttpGet("{documentId:guid}/file")]
+    public async Task<IActionResult> Download(Guid documentId, CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null)
+        {
+            return BadRequest("Organization id is required.");
+        }
+
+        try
+        {
+            var file = await _knowledge.OpenDownloadAsync(
+                _currentUser.OrganizationId.Value,
+                documentId,
+                cancellationToken);
+            // Caller disposes via FileStreamResult when the response finishes.
+            return File(file.Content, file.ContentType, file.FileName);
         }
         catch (InvalidOperationException ex)
         {

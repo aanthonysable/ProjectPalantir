@@ -62,6 +62,7 @@ Deliverables:
 - Voicemail transcription.
 - SMS if supported by licensing/region.
 - **WhatsApp thread integration** (conversation sync into inbox/threads; provider + compliance TBD).
+  **Pilot focus (2026-07):** read/keep up with existing WA Business channels; cross-ref MaintainX / Monday quotes / EZRentOut so similar quotes & orders don’t fall through cracks. Outbound later.
 - Queue dashboard.
 
 ## Phase 6 - Mobile and Desktop

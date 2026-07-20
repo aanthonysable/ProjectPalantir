@@ -30,6 +30,23 @@ public sealed class KnowledgeIndexBackgroundService : BackgroundService
     {
         await RecoverPendingAsync(stoppingToken);
 
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var knowledge = scope.ServiceProvider.GetRequiredService<IKnowledgeService>();
+            var updated = await knowledge.BackfillSearchTagsAsync(stoppingToken);
+            if (updated > 0)
+            {
+                _logger.LogInformation(
+                    "Backfilled search tags / browse classification on {Count} knowledge document(s)",
+                    updated);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not backfill knowledge search tags on startup");
+        }
+
         await foreach (var job in _queue.DequeueAllAsync(stoppingToken))
         {
             try

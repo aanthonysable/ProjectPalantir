@@ -99,7 +99,14 @@ public sealed record OverviewChatReplyDto(
     string Reply,
     OverviewSnapshotDto Snapshot,
     OverviewFocus FocusUsed,
-    Guid SessionId);
+    Guid SessionId,
+    IReadOnlyList<KnowledgeSourceDto>? KnowledgeSources = null);
+
+/// <summary>Knowledge document the assistant cited / offered for download.</summary>
+public sealed record KnowledgeSourceDto(
+    Guid DocumentId,
+    string Title,
+    string FileName);
 
 public interface IOverviewService
 {

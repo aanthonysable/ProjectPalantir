@@ -1,0 +1,36 @@
+# Temporary WhatsApp Web bridge (WAHA) for internal group ingest.
+# See connectors/WhatsApp/README.md
+#
+#   set -a; source .env.whatsapp-bridge; set +a
+#   docker compose -f docker-compose.whatsapp.yml up -d
+#
+# Apple Silicon: use *-arm images ( :latest is amd64-only ).
+# NOWEB is usually more reliable for QR / pairing than WEBJS.
+
+services:
+  waha:
+    image: devlikeapro/waha:noweb-arm
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.whatsapp-bridge
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+      WAHA_PRINT_QR: "false"
+      # Global webhook only — do not also attach session webhooks (causes duplicates).
+      # message.any alone covers inbound + from-me; "message" overlaps and double-fires.
+      WHATSAPP_HOOK_URL: "http://host.docker.internal:5251/webhooks/whatsapp?secret=${PALANTIR_WA_WEBHOOK_SECRET}"
+      WHATSAPP_HOOK_EVENTS: message.any
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_SWAGGER_USERNAME: ${WHATSAPP_SWAGGER_USERNAME:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WHATSAPP_SWAGGER_PASSWORD}
+    volumes:
+      - waha_sessions:/app/.sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  waha_sessions:

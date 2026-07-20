@@ -520,17 +520,25 @@ export const generateOverviewRecap = (focus: OverviewFocus) =>
     body: JSON.stringify(focus),
   })
 
-export type OverviewChatTurn = {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 export type OverviewChatReply = {
   generatedAt: string
   reply: string
   snapshot: OverviewSnapshot
   focusUsed: OverviewFocus
   sessionId: string
+  knowledgeSources?: KnowledgeSource[] | null
+}
+
+export type KnowledgeSource = {
+  documentId: string
+  title: string
+  fileName: string
+}
+
+export type OverviewChatTurn = {
+  role: 'user' | 'assistant'
+  content: string
+  knowledgeSources?: KnowledgeSource[] | null
 }
 
 export const askOverviewChat = (
@@ -580,6 +588,14 @@ export const uploadAskAttachments = (files: File[], sessionId?: string | null) =
     method: 'POST',
     body: form,
   })
+}
+
+export const getAskAttachments = (ids: string[]) => {
+  const q = new URLSearchParams()
+  for (const id of ids) {
+    q.append('ids', id)
+  }
+  return api<AskAttachment[]>(`/ask/attachments?${q}`)
 }
 
 export const promoteAskAttachment = (attachmentId: string, title?: string) =>
@@ -648,6 +664,37 @@ export const getOpsHealth = () => api<ConnectorHealth[]>('/ops/health')
 
 export const getOpsOpenWork = () => api<ExternalWorkItem[]>('/ops/open-work')
 
+export type WhatsAppBridgeStatus = {
+  enabled: boolean
+  configured: boolean
+  instanceName: string
+  detail: string
+  whatsAppConversationCount: number
+  whatsAppMessageCount: number
+}
+
+export type WhatsAppOpsMatch = {
+  sourceSystem: string
+  environmentName: string
+  externalId: string
+  title: string
+  matchMethod: string
+}
+
+export type WhatsAppGap = {
+  conversationId: string
+  subject: string
+  updatedAt: string
+  matchStatus: string
+  latestSnippet: string
+  extractedHints: string[]
+  matches: WhatsAppOpsMatch[]
+}
+
+export const getWhatsAppStatus = () => api<WhatsAppBridgeStatus>('/whatsapp/status')
+
+export const getWhatsAppGaps = () => api<WhatsAppGap[]>('/whatsapp/gaps')
+
 export const proposeOpsWriteBack = (input: {
   sourceSystem: string
   environmentName?: string | null
@@ -674,9 +721,25 @@ export type KnowledgeDocument = {
   byteSize: number
   status: string
   indexError: string | null
+  tags: string | null
+  collection: string
+  folderPath: string | null
+  contentHash?: string | null
+  duplicateOfDocumentId?: string | null
   chunkCount: number
   createdAt: string
   updatedAt: string
+}
+
+export type KnowledgeCollection = {
+  name: string
+  documentCount: number
+  folders: string[]
+}
+
+export type KnowledgeLibrary = {
+  collections: KnowledgeCollection[]
+  documents: KnowledgeDocument[]
 }
 
 export type KnowledgeUploadResult = {
@@ -706,6 +769,8 @@ export type UploadProgress = {
 export const getKnowledgeStatus = () => api<KnowledgeStatus>('/knowledge/status')
 
 export const listKnowledgeDocuments = () => api<KnowledgeDocument[]>('/knowledge')
+
+export const getKnowledgeLibrary = () => api<KnowledgeLibrary>('/knowledge/library')
 
 export const uploadKnowledgeDocument = (
   file: File,
@@ -816,6 +881,71 @@ function uploadWithProgress<T>(
 
 export const deleteKnowledgeDocument = (documentId: string) =>
   api<void>(`/knowledge/${documentId}`, { method: 'DELETE' })
+
+export type KnowledgeFileBlob = {
+  blob: Blob
+  fileName: string
+  contentType: string
+  objectUrl: string
+}
+
+/** Fetch the original knowledge blob (for preview or download). Caller must revoke objectUrl. */
+export async function fetchKnowledgeFileBlob(
+  documentId: string,
+  fileName?: string,
+): Promise<KnowledgeFileBlob> {
+  const token = getAccessToken()
+  const response = await fetch(`/api/knowledge/${documentId}/file`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (response.status === 401) {
+    clearSession()
+    throw new ApiError(401, 'Session expired — sign in again.')
+  }
+  if (!response.ok) {
+    const text = await response.text()
+    let message = text || `Download failed (${response.status})`
+    try {
+      const parsed = JSON.parse(text) as { error?: string }
+      if (parsed.error) message = parsed.error
+    } catch {
+      /* keep message */
+    }
+    throw new ApiError(response.status, message)
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const matched = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disposition)
+  const resolvedName =
+    fileName ||
+    (matched ? decodeURIComponent(matched[1].replace(/"/g, '')) : null) ||
+    'knowledge-file'
+  const contentType =
+    response.headers.get('Content-Type') || blob.type || 'application/octet-stream'
+
+  return {
+    blob,
+    fileName: resolvedName,
+    contentType,
+    objectUrl: URL.createObjectURL(blob),
+  }
+}
+
+/** Download the original knowledge blob (PDF, etc.) with auth. */
+export async function downloadKnowledgeFile(
+  documentId: string,
+  fileName?: string,
+): Promise<void> {
+  const file = await fetchKnowledgeFileBlob(documentId, fileName)
+  const a = document.createElement('a')
+  a.href = file.objectUrl
+  a.download = file.fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(file.objectUrl)
+}
 
 export const proposeKnowledgeCapture = (input: {
   title: string
