@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   ApprovalItem,
@@ -41,6 +41,7 @@ import {
   syncOutlookInbox,
   defaultOverviewFocus,
   askOverviewChat,
+  uploadAskAttachments,
   listAskSessions,
   getAskSession,
   deleteAskSession,
@@ -62,6 +63,7 @@ import {
   OverviewChatTurn,
   OverviewFocus,
   AskSessionSummary,
+  AskAttachment,
 } from './api'
 import { signInWithEntra } from './entraAuth'
 import { BrandMark } from './BrandMark'
@@ -80,7 +82,7 @@ const soonNavItems = ['Projects', 'Customers'] as const
 const navItems = [...readyNavItems, ...soonNavItems] as const
 type NavItem = (typeof navItems)[number]
 
-const OVERVIEW_PREFS_KEY = 'palantir.overviewFocus.v3'
+const OVERVIEW_PREFS_KEY = 'palantir.overviewFocus.v4'
 
 type OpenWorkFilters = {
   source: string
@@ -196,9 +198,12 @@ export default function App() {
   const [overviewChat, setOverviewChat] = useState<OverviewChatTurn[]>([])
   const [overviewChatDraft, setOverviewChatDraft] = useState('')
   const [overviewChatBusy, setOverviewChatBusy] = useState(false)
+  const [askThinkingSeconds, setAskThinkingSeconds] = useState(0)
   const [askSourcesOpen, setAskSourcesOpen] = useState(false)
   const [askSessions, setAskSessions] = useState<AskSessionSummary[]>([])
   const [askSessionId, setAskSessionId] = useState<string | null>(null)
+  const [askPendingFiles, setAskPendingFiles] = useState<File[]>([])
+  const askFileInputRef = useRef<HTMLInputElement | null>(null)
   const [opsHealth, setOpsHealth] = useState<ConnectorHealth[]>([])
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null)
@@ -220,6 +225,7 @@ export default function App() {
   const [writeBackTarget, setWriteBackTarget] = useState<ExternalWorkItem | null>(null)
   const [writeBackBody, setWriteBackBody] = useState('')
   const [theme, setTheme] = useState<ThemeColors>(() => loadTheme())
+  const askThreadRef = useRef<HTMLDivElement>(null)
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null
   const currentUserId = session?.userId ?? null
@@ -243,15 +249,40 @@ export default function App() {
 
   const onOverviewChatSend = async (question?: string) => {
     const text = (question ?? overviewChatDraft).trim()
-    if (!text || overviewChatBusy) return
+    const pendingFiles = askPendingFiles
+    if ((!text && pendingFiles.length === 0) || overviewChatBusy) return
 
-    const nextTurns: OverviewChatTurn[] = [...overviewChat, { role: 'user', content: text }]
+    const content =
+      text ||
+      (pendingFiles.length === 1
+        ? `Please review the attached file (${pendingFiles[0].name}).`
+        : `Please review the ${pendingFiles.length} attached files.`)
+    const fileNote =
+      pendingFiles.length > 0
+        ? `\n\n[Attached: ${pendingFiles.map((f) => f.name).join(', ')}]`
+        : ''
+    const nextTurns: OverviewChatTurn[] = [
+      ...overviewChat,
+      { role: 'user', content: content + fileNote },
+    ]
     setOverviewChat(nextTurns)
     setOverviewChatDraft('')
+    setAskPendingFiles([])
     setOverviewChatBusy(true)
     setError(null)
     try {
-      const reply = await askOverviewChat(overviewFocus, nextTurns, true, askSessionId)
+      let attachmentIds: string[] = []
+      if (pendingFiles.length > 0) {
+        const uploaded = await uploadAskAttachments(pendingFiles, askSessionId)
+        attachmentIds = uploaded.map((a: AskAttachment) => a.id)
+      }
+      const reply = await askOverviewChat(
+        overviewFocus,
+        nextTurns,
+        false,
+        askSessionId,
+        attachmentIds,
+      )
       setOverviewChat([...nextTurns, { role: 'assistant', content: reply.reply }])
       setAskSessionId(reply.sessionId)
       setStatusBanner(`Live facts · ${new Date(reply.generatedAt).toLocaleString()}`)
@@ -260,10 +291,18 @@ export default function App() {
     } catch (err) {
       setOverviewChat(overviewChat)
       setOverviewChatDraft(text)
+      setAskPendingFiles(pendingFiles)
       setError(err instanceof Error ? err.message : 'Chat failed')
     } finally {
       setOverviewChatBusy(false)
     }
+  }
+
+  const onAskFilesChosen = (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const next = [...askPendingFiles, ...Array.from(files)].slice(0, 5)
+    setAskPendingFiles(next)
+    if (askFileInputRef.current) askFileInputRef.current.value = ''
   }
 
   const refreshAskSessions = async () => {
@@ -274,6 +313,7 @@ export default function App() {
     setAskSessionId(null)
     setOverviewChat([])
     setOverviewChatDraft('')
+    setAskPendingFiles([])
     setError(null)
   }
 
@@ -468,6 +508,38 @@ export default function App() {
   const loadMessages = async (conversationId: string) => {
     setMessages(await listMessages(conversationId))
   }
+
+  useEffect(() => {
+    if (!statusBanner) return
+    const timer = window.setTimeout(() => setStatusBanner(null), 4500)
+    return () => window.clearTimeout(timer)
+  }, [statusBanner])
+
+  useEffect(() => {
+    if (!error) return
+    const timer = window.setTimeout(() => setError(null), 8000)
+    return () => window.clearTimeout(timer)
+  }, [error])
+
+  useEffect(() => {
+    if (active !== 'Ask') return
+    const el = askThreadRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [active, overviewChat, overviewChatBusy])
+
+  useEffect(() => {
+    if (!overviewChatBusy) {
+      setAskThinkingSeconds(0)
+      return
+    }
+    setAskThinkingSeconds(0)
+    const started = Date.now()
+    const timer = window.setInterval(() => {
+      setAskThinkingSeconds(Math.floor((Date.now() - started) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [overviewChatBusy])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1263,8 +1335,8 @@ export default function App() {
                 <div>
                   <h2>Ask</h2>
                   <p className="muted">
-                    Live MaintainX / Quotes / inventory for each question, plus knowledge and prior
-                    Ask chats for learning. Quotes include line items and dollar amounts.
+                    Live MaintainX / EZRentOut / Quotes / inventory for each question, plus knowledge
+                    and prior Ask chats for learning. Quotes include line items and dollar amounts.
                   </p>
                 </div>
                 <div className="ask-header-actions">
@@ -1339,19 +1411,23 @@ export default function App() {
                 </div>
               )}
 
-              <div className="ask-thread" aria-live="polite">
+              <div className="ask-thread" ref={askThreadRef} aria-live="polite">
                 {overviewChat.length === 0 ? (
                   <div className="ask-empty">
                     <p className="ask-empty-lead">What do you need to know?</p>
                     <p className="muted">
-                      Open work, inventory, aging quotes (with dollars & lines), knowledge — ask in
-                      plain language.
+                      Open work, rentals, inventory, aging quotes (with dollars & lines), knowledge —
+                      ask in plain language.
                     </p>
                     <div className="overview-chat-suggestions">
                       {(
                         [
                           'Give me a brief ops recap for today',
                           'Who has the most physical open work right now?',
+                          'What EZRentOut assets are checked out or overdue?',
+                          "What's QwikPipe's current daily on-rent run-rate?",
+                          "What's QwikPipe's MTD and YTD billed rental revenue?",
+                          'EZRentOut revenue last month by customer',
                           'What inventory is out or critically low?',
                           'Which quotes are aging and what are the dollar amounts?',
                         ] as const
@@ -1396,7 +1472,30 @@ export default function App() {
                     </div>
                   ))
                 )}
-                {overviewChatBusy && <p className="muted">Thinking…</p>}
+                {overviewChatBusy && (
+                  <div className="ask-thinking" role="status" aria-live="polite">
+                    <span className="ask-thinking-label">
+                      Thinking
+                      <span className="ask-thinking-dots" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                    </span>
+                    <span className="ask-thinking-bar" aria-hidden="true" />
+                    {askThinkingSeconds >= 8 && (
+                      <span className="ask-thinking-hint muted">
+                        Still working
+                        {askThinkingSeconds >= 60
+                          ? ` · ${Math.floor(askThinkingSeconds / 60)}m ${askThinkingSeconds % 60}s`
+                          : ` · ${askThinkingSeconds}s`}
+                        {askThinkingSeconds >= 90
+                          ? ' (live pulls can take a few minutes)'
+                          : ''}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               <form
@@ -1406,22 +1505,71 @@ export default function App() {
                   void onOverviewChatSend()
                 }}
               >
-                <textarea
-                  value={overviewChatDraft}
-                  onChange={(e) => setOverviewChatDraft(e.target.value)}
-                  placeholder="Ask about open work, quotes, inventory, knowledge…"
-                  rows={2}
-                  disabled={overviewChatBusy}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      void onOverviewChatSend()
+                {askPendingFiles.length > 0 && (
+                  <div className="ask-attach-chips">
+                    {askPendingFiles.map((file, idx) => (
+                      <span key={`${file.name}-${idx}`} className="ask-attach-chip">
+                        {file.name}
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={overviewChatBusy}
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() =>
+                            setAskPendingFiles((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="ask-compose-row">
+                  <input
+                    ref={askFileInputRef}
+                    type="file"
+                    multiple
+                    accept=".pdf,.txt,.md,.csv,.json,.log,.xml,.html,.htm,text/*,application/pdf,application/json"
+                    hidden
+                    onChange={(e) => onAskFilesChosen(e.target.files)}
+                  />
+                  <button
+                    type="button"
+                    className="ghost ask-attach-btn"
+                    disabled={overviewChatBusy || askPendingFiles.length >= 5}
+                    title="Attach a file for Ask to review (PDF / text). Say “add to knowledge” to save it."
+                    onClick={() => askFileInputRef.current?.click()}
+                  >
+                    Attach
+                  </button>
+                  <textarea
+                    value={overviewChatDraft}
+                    onChange={(e) => setOverviewChatDraft(e.target.value)}
+                    placeholder="Ask about open work, rentals, quotes… or attach a file to review"
+                    rows={2}
+                    disabled={overviewChatBusy}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        void onOverviewChatSend()
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      overviewChatBusy ||
+                      (!overviewChatDraft.trim() && askPendingFiles.length === 0)
                     }
-                  }}
-                />
-                <button type="submit" disabled={overviewChatBusy || !overviewChatDraft.trim()}>
-                  {overviewChatBusy ? '…' : 'Ask'}
-                </button>
+                  >
+                    {overviewChatBusy ? '…' : 'Ask'}
+                  </button>
+                </div>
+                <p className="muted ask-attach-hint">
+                  Attach PDF/text for review. Say “add to knowledge” to save attached files into org
+                  knowledge.
+                </p>
               </form>
             </section>
           </section>

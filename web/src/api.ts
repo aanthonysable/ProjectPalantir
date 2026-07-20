@@ -493,7 +493,7 @@ export const defaultOverviewFocus = (): OverviewFocus => ({
   includeApprovals: false,
   includeMaintainX: true,
   includeMaintainXInventory: true,
-  includeEZRentOut: false,
+  includeEZRentOut: true,
   includeMonday: true,
   includeConnectorHealth: true,
   customPrompt: '',
@@ -536,8 +536,9 @@ export type OverviewChatReply = {
 export const askOverviewChat = (
   focus: OverviewFocus,
   messages: OverviewChatTurn[],
-  refreshFacts = true,
+  refreshFacts = false,
   sessionId?: string | null,
+  attachmentIds?: string[],
 ) =>
   api<OverviewChatReply>('/overview/chat', {
     method: 'POST',
@@ -546,7 +547,45 @@ export const askOverviewChat = (
       messages,
       refreshFacts,
       sessionId: sessionId || null,
+      attachmentIds: attachmentIds?.length ? attachmentIds : [],
     }),
+  })
+
+export type AskAttachment = {
+  id: string
+  fileName: string
+  contentType: string
+  byteSize: number
+  extractStatus: string
+  extractedChars: number
+  sessionId?: string | null
+  knowledgeDocumentId?: string | null
+  createdAt: string
+}
+
+export type AskAttachmentPromoteResult = {
+  attachment: AskAttachment
+  knowledge: KnowledgeUploadResult | null
+}
+
+export const uploadAskAttachments = (files: File[], sessionId?: string | null) => {
+  const form = new FormData()
+  for (const file of files) {
+    form.append('files', file)
+  }
+  if (sessionId) {
+    form.append('sessionId', sessionId)
+  }
+  return api<AskAttachment[]>('/ask/attachments', {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export const promoteAskAttachment = (attachmentId: string, title?: string) =>
+  api<AskAttachmentPromoteResult>(`/ask/attachments/${attachmentId}/promote`, {
+    method: 'POST',
+    body: JSON.stringify({ title: title || null }),
   })
 
 export type AskSessionSummary = {

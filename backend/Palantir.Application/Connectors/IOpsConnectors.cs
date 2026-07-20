@@ -71,11 +71,29 @@ public sealed record InventoryAlertDto(
     string? Area,
     string? PartTypes);
 
+/// <summary>EZRentOut rental order (basket) used for historical revenue rollups.</summary>
+public sealed record EzRentOrderDto(
+    string OrderId,
+    string Customer,
+    string State,
+    decimal NetAmount,
+    decimal GrossAmount,
+    DateTimeOffset? BillFrom,
+    DateTimeOffset? BillTo,
+    DateTimeOffset? CheckedOutOn,
+    DateTimeOffset? CompletedOn);
+
 public interface IEZRentOutConnector
 {
     Task<ConnectorHealthDto> CheckHealthAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ExternalWorkItemDto>> ListOpenWorkAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Completed / checked-out / payment-pending orders with billed amounts for MTD/YTD history.
+    /// </summary>
+    Task<IReadOnlyList<EzRentOrderDto>> ListOrdersAsync(
         CancellationToken cancellationToken = default);
 }
 

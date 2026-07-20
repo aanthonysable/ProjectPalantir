@@ -16,13 +16,15 @@ Then update Running total (closed sessions only).
 
 Running total
 -------------
-7.5 hours (closed sessions through 2026-07-17)
+9.7 hours (closed sessions through 2026-07-20)
 
 Open session
 ------------
-(none)
+OPEN | 2026-07-20 12:15 | started
 
 Entries
 -------
 2026-07-16 | 3.5 | Day 1 foundation through Phase 2–4 pilot: API/web scaffold, Outlook Graph connect/sync/send, approvals, Ollama AI, pilot + Entra External ID login, full message bodies, thread sort. Session ~11:30–16:20 minus inactive break ~13:00–14:30.
 2026-07-17 | 4.0 | Full day: ops connectors (MaintainX×2 / EZRentOut / Monday), Admin health + Open work, theme/Gemini AI, Ask + knowledge (PDF, 4GB uploads, progress, background indexing), floating toasts, DEPENDENCIES/check-deps, resume todos. Session ~10:45–15:35 minus ~0.8h interruptions.
+2026-07-20 | 2.2 | Morning so far (~08:30–10:40): app verify/restart; Ask + EZRentOut (enable source, customer $/day·month·year + historical order rollups YTD/MTD); Ask UX (toast auto-dismiss, auto-scroll, thinking animation); first-pass mobile/responsive web; Monday billed/converted quote facts + customer-match fix; shared DB OpsSnapshots (~5 min background refresh for MaintainX/Monday/EZRentOut); roadmap/todos (WhatsApp, mobile polish, Save-to-knowledge fix, parallel Ask chats, opt-in web lookup). More hours later today.
+

@@ -47,8 +47,12 @@ Deliverables:
 - Draft replies.
 - Approval workflow.
 - Knowledge retrieval (MVP: Admin upload → Azure Blob `knowledge` + SQL chunks; Overview recap/Ask retrieve excerpts).
+- Fix Ask **Save to knowledge** chat capture button (bug).
+- Continue **mobile / tablet web** responsive formatting (alongside native apps later).
 - User writing preferences.
 - Project/customer context.
+- **Later / low priority:** parallel Ask chats (multiple in-flight questions across sessions). Ask has no public web browse today — answers come from live ops fact sheets + indexed knowledge + prior Ask history only.
+- **Later / low priority:** opt-in web lookup — if internal knowledge/fact sheet miss, Ask may ask permission before searching the web; results labeled as external (provider + security review required).
 
 ## Phase 5 - Central Communications
 
@@ -57,10 +61,12 @@ Deliverables:
 - Call logs.
 - Voicemail transcription.
 - SMS if supported by licensing/region.
+- **WhatsApp thread integration** (conversation sync into inbox/threads; provider + compliance TBD).
 - Queue dashboard.
 
 ## Phase 6 - Mobile and Desktop
 
+- Continue responsive **mobile web** polish (near-term; before full native apps).
 - iOS approval app.
 - Android approval app.
 - Windows desktop app.
@@ -112,4 +118,5 @@ Branch from the communications plan to unify operational work tools. Detail: `do
 - Monday.com connector — **Sable Operations workspace only** (other workspaces deprecated).
 - MaintainX status semantics: OPEN / IN_PROGRESS = physical work; ON_HOLD = physically finished (back office close-out); DONE = billed/closed.
 - Unified open-work view + AI insights across sources.
+- **Shared DB ops snapshots** (background refresh → `OpsSnapshots`; Ask reuses across users).
 - Future: limited accounting reads via SAP **or** Syteline (`IAccountingConnector`).

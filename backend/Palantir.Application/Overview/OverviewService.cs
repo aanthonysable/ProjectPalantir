@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
@@ -27,7 +28,10 @@ public sealed class OverviewService : IOverviewService
     private readonly IAiCompletionClient _ai;
     private readonly IKnowledgeService _knowledge;
     private readonly IAskHistoryService _askHistory;
+    private readonly IAskAttachmentService _askAttachments;
     private readonly IAuditEventWriter _audit;
+    private readonly IOpsSnapshotStore _opsSnapshots;
+    private readonly OpsSnapshotOptions _opsSnapshotOptions;
 
     public OverviewService(
         IPalantirDbContext db,
@@ -39,7 +43,10 @@ public sealed class OverviewService : IOverviewService
         IAiCompletionClient ai,
         IKnowledgeService knowledge,
         IAskHistoryService askHistory,
-        IAuditEventWriter audit)
+        IAskAttachmentService askAttachments,
+        IAuditEventWriter audit,
+        IOpsSnapshotStore opsSnapshots,
+        IOptions<OpsSnapshotOptions> opsSnapshotOptions)
     {
         _db = db;
         _opsHealth = opsHealth;
@@ -50,7 +57,10 @@ public sealed class OverviewService : IOverviewService
         _ai = ai;
         _knowledge = knowledge;
         _askHistory = askHistory;
+        _askAttachments = askAttachments;
         _audit = audit;
+        _opsSnapshots = opsSnapshots;
+        _opsSnapshotOptions = opsSnapshotOptions.Value;
     }
 
     public async Task<OverviewSnapshotDto> GetSnapshotAsync(
@@ -69,6 +79,8 @@ public sealed class OverviewService : IOverviewService
         }
 
         var maintainXOpen = new List<ExternalWorkItemDto>();
+        var ezRentOutOpen = new List<ExternalWorkItemDto>();
+        var ezRentOrders = Array.Empty<EzRentOrderDto>();
         var recentlyCompleted = new List<ExternalWorkItemDto>();
         var quotes = new List<ExternalWorkItemDto>();
         var inventoryAlerts = new List<InventoryAlertDto>();
@@ -127,11 +139,20 @@ public sealed class OverviewService : IOverviewService
         {
             try
             {
-                maintainXOpen.AddRange(await _ezRentOut.ListOpenWorkAsync(cancellationToken));
+                ezRentOutOpen.AddRange(await _ezRentOut.ListOpenWorkAsync(cancellationToken));
             }
             catch (Exception ex)
             {
-                notes.Add($"EZRentOut: {ex.Message}");
+                notes.Add($"EZRentOut assets: {ex.Message}");
+            }
+
+            try
+            {
+                ezRentOrders = (await _ezRentOut.ListOrdersAsync(cancellationToken)).ToArray();
+            }
+            catch (Exception ex)
+            {
+                notes.Add($"EZRentOut orders: {ex.Message}");
             }
         }
 
@@ -338,12 +359,63 @@ public sealed class OverviewService : IOverviewService
         var agingQuotes = quotes.Count(q => q.Metadata?.GetValueOrDefault("aging") == "true");
         var linkedQuotes = quotes.Count(q =>
             !string.IsNullOrWhiteSpace(q.Metadata?.GetValueOrDefault("maintainXWorkOrderId")));
+        var billedQuotes = quotes
+            .Where(q => string.Equals(q.Status, "Billed", StringComparison.OrdinalIgnoreCase) ||
+                        q.Metadata?.GetValueOrDefault("bucket") == "billed")
+            .OrderByDescending(q =>
+                DateTimeOffset.TryParse(q.Metadata?.GetValueOrDefault("billedAt"), out var billedAt)
+                    ? billedAt
+                    : DateTimeOffset.MinValue)
+            .ToList();
+        if (billedQuotes.Count > 0)
+        {
+            var withDates = billedQuotes.Count(q =>
+                !string.IsNullOrWhiteSpace(q.Metadata?.GetValueOrDefault("billedAt")));
+            notes.Add(
+                $"Monday Quotes: {quotes.Count} open/pipeline + billed loaded; " +
+                $"{billedQuotes.Count} currently Billed ({withDates} with status-change dates). " +
+                "Quote Status \"Billed\" = converted to billed order (not EZRentOut rental revenue).");
+        }
+
         var inventoryOut = inventoryAlerts.Count(a => a.Severity == "Out");
         var inventoryLow = inventoryAlerts.Count(a => a.Severity == "Low");
         var inventorySample = inventoryAlerts
             .OrderBy(a => a.Severity == "Out" ? 0 : 1)
             .ThenBy(a => a.AvailableQuantity)
             .Take(120)
+            .ToList();
+
+        // Keep all checked-out rentals so Ask can aggregate customer $/day accurately.
+        var ezSample = ezRentOutOpen
+            .OrderBy(i => i.Assignee ?? "", StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => i.DueAt ?? DateTimeOffset.MaxValue)
+            .ThenBy(i => i.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (ezSample.Count > 0 || ezRentOrders.Length > 0)
+        {
+            var overdue = ezSample.Count(i =>
+                string.Equals(i.Status, "Overdue return", StringComparison.OrdinalIgnoreCase));
+            var dailyTotal = ezSample.Sum(ReadDailyRate);
+            var now = DateTimeOffset.UtcNow;
+            var mtd = SumOrderRevenue(ezRentOrders, StartOfMonth(now), StartOfMonth(now).AddMonths(1));
+            var ytd = SumOrderRevenue(ezRentOrders, StartOfYear(now), StartOfYear(now).AddYears(1));
+            notes.Add(
+                $"EZRentOut: {ezSample.Count} assets checked out ({overdue} overdue); " +
+                $"current daily run-rate ${dailyTotal:0.##}/day (not historical). " +
+                $"Order history: {ezRentOrders.Length} orders; MTD ${mtd:0.##}; YTD ${ytd:0.##} " +
+                "(net amounts prorated across each order's bill_from→bill_to).");
+        }
+
+        var externalSample = mxSample.Concat(ezSample).ToList();
+        var quoteSample = billedQuotes
+            .Concat(
+                quotes
+                    .Where(q => billedQuotes.All(b =>
+                        !string.Equals(b.ExternalId, q.ExternalId, StringComparison.OrdinalIgnoreCase)))
+                    .OrderByDescending(q =>
+                        int.TryParse(q.Metadata?.GetValueOrDefault("ageDays"), out var d) ? d : 0)
+                    .Take(140))
+            .Take(220)
             .ToList();
 
         return new OverviewSnapshotDto(
@@ -361,16 +433,15 @@ public sealed class OverviewService : IOverviewService
                 inventoryOut,
                 inventoryLow),
             health,
-            mxSample,
+            externalSample,
             recentlyCompleted.Take(80).ToList(),
-            quotes.OrderByDescending(q => int.TryParse(q.Metadata?.GetValueOrDefault("ageDays"), out var d) ? d : 0)
-                .Take(120)
-                .ToList(),
+            quoteSample,
             inventorySample,
             conversations,
             openTasks,
             pendingApprovals,
-            notes);
+            notes,
+            ezRentOrders);
     }
 
     private async Task<List<ExternalWorkItemDto>> EnrichMaintainXCommentsAsync(
@@ -494,13 +565,13 @@ public sealed class OverviewService : IOverviewService
                     "system",
                     """
                     You write a daily ops executive brief for Sable people who already know the business,
-                    the areas (Northern / Permian / Shop), MaintainX, and the Monday Quotes board.
+                    the areas (Northern / Permian / Shop), MaintainX, EZRentOut, and the Monday Quotes board.
                     This is NOT an outsider overview, onboarding doc, or company explainer.
 
                     Voice:
-                    - Insider to insider. Assume shared context; never define Sable, MaintainX, Monday, or status codes.
+                    - Insider to insider. Assume shared context; never define Sable, MaintainX, Monday, EZRentOut, or status codes.
                     - Lead with physical work that still needs wrenches: OPEN and IN_PROGRESS.
-                    - Prefer concrete names, WO ids, quote ages, and part shortages over generalities.
+                    - Prefer concrete names, WO ids, rental assets, quote ages, and part shortages over generalities.
                     - Skip healthy/routine noise unless it changes the picture.
                     - Do not open with "Sable Automation…" or "This briefing covers…".
 
@@ -572,19 +643,34 @@ public sealed class OverviewService : IOverviewService
             throw new InvalidOperationException("Ask a question about current ops facts.");
         }
 
-        // Always pull live connector data for Ask — do not answer from a stale generic cache.
+        // Prefer shared DB ops snapshot (background-refreshed for all users).
+        // Pass refreshFacts: true only when the client forces a live rebuild.
         var snapshot = await ResolveSnapshotAsync(
             organizationId,
             userId,
             focus,
-            refreshFacts: true,
+            refreshFacts: request.RefreshFacts,
             cancellationToken);
         var question = turns[^1].Content;
+        var attachmentIds = (request.AttachmentIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .Take(5)
+            .ToList();
+        var attachedFiles = attachmentIds.Count == 0
+            ? []
+            : await _askAttachments.GetExtractedForPromptAsync(
+                organizationId, userId, attachmentIds, cancellationToken);
+        var attachmentBlock = BuildAskAttachmentBlock(attachedFiles);
+        var wantsPromoteAttachments = attachedFiles.Count > 0 && WantsPromoteAttachments(question);
 
         // Pull comments for WOs that best match this question (beyond the generic snapshot enrich).
         snapshot = await EnrichSnapshotForQuestionAsync(snapshot, question, cancellationToken);
 
-        var deterministic = TryBuildDeterministicChatReply(snapshot, question);
+        // File review / promote needs the model (or promote path) — skip ops deterministic shortcuts.
+        var deterministic = attachedFiles.Count > 0
+            ? null
+            : TryBuildDeterministicChatReply(snapshot, question);
         if (deterministic is not null)
         {
             await _audit.WriteAsync(
@@ -596,14 +682,15 @@ public sealed class OverviewService : IOverviewService
                 JsonSerializer.Serialize(new
                 {
                     turnCount = turns.Count,
-                    refreshFacts = true,
+                    refreshFacts = request.RefreshFacts,
                     mode = "deterministic",
                     questionChars = question.Length,
                     counts = snapshot.Counts
                 }),
                 cancellationToken);
             return await PersistAndReplyAsync(
-                organizationId, userId, request.SessionId, question, deterministic, snapshot, focus, cancellationToken);
+                organizationId, userId, request.SessionId, question, deterministic, snapshot, focus,
+                attachmentIds, cancellationToken);
         }
 
         var factSheet = BuildChatFactSheet(snapshot, question);
@@ -611,13 +698,22 @@ public sealed class OverviewService : IOverviewService
 
         if (!_ai.IsConfiguredFor(AiTaskKind.Chat) && !_ai.IsConfigured)
         {
-            var fallback =
-                "AI is not configured. Live counts from the fact sheet:\n" +
-                $"mxOpen={snapshot.Counts.ExternalOpenWork}, completed={snapshot.Counts.RecentlyCompleted}, " +
-                $"agingQuotes={snapshot.Counts.AgingQuotes}, inventoryOut={snapshot.Counts.InventoryOut}, " +
-                $"inventoryLow={snapshot.Counts.InventoryLow}.";
+            var fallback = attachedFiles.Count > 0
+                ? "AI is not configured, so I can't review the attached file(s). " +
+                  "Configure AI under Admin, or promote the file to knowledge from Ask."
+                : "AI is not configured. Live counts from the fact sheet:\n" +
+                  $"mxOpen={snapshot.Counts.ExternalOpenWork}, completed={snapshot.Counts.RecentlyCompleted}, " +
+                  $"agingQuotes={snapshot.Counts.AgingQuotes}, inventoryOut={snapshot.Counts.InventoryOut}, " +
+                  $"inventoryLow={snapshot.Counts.InventoryLow}.";
+            if (wantsPromoteAttachments)
+            {
+                fallback += "\n\n" + await PromoteAttachmentsAndSummarizeAsync(
+                    organizationId, userId, attachmentIds, cancellationToken);
+            }
+
             return await PersistAndReplyAsync(
-                organizationId, userId, request.SessionId, question, fallback, snapshot, focus, cancellationToken);
+                organizationId, userId, request.SessionId, question, fallback, snapshot, focus,
+                attachmentIds, cancellationToken);
         }
 
         var custom = string.IsNullOrWhiteSpace(focus.CustomPrompt)
@@ -631,18 +727,28 @@ public sealed class OverviewService : IOverviewService
                 """
                 You are an internal Sable ops assistant. Readers already know the shop.
 
-                The FACT SHEET was just retrieved from live MaintainX / Monday / inventory and ranked for THIS question.
+                The FACT SHEET was just retrieved from live MaintainX / EZRentOut / Monday / inventory and ranked for THIS question.
                 KNOWLEDGE EXCERPTS and PRIOR ASK HISTORY were searched against the question text.
-                Answer ONLY from those blocks. Prefer live FACT SHEET over prior Ask history when they conflict. Copy names and WO# exactly as written.
+                ATTACHED FILES (if present) were uploaded for THIS turn — review them when the user asks about the file/document.
+                Answer ONLY from those blocks. Prefer live FACT SHEET over prior Ask history when they conflict. Copy names, WO#, and asset ids exactly as written.
                 Rules:
-                - Prefer "## Matches for this question" when present; otherwise use workload rollups and listed lines.
-                - For WO details, copy whole WO lines (WO# | area | status | person | title | comments).
-                - Never invent people, WO numbers, parts, quotes, or quantities.
+                - Default style: a short human answer (1–3 sentences, or a few tight bullets). Lead with the number / name they asked for.
+                - Do NOT dump line items, full WO lists, asset lists, quote tables, or long rollups unless the user asks for details / breakdown / list / line items / "show me" / "which ones".
+                - If they only asked for a total or "who has the most", give that answer and stop. Offer that you can break it down if useful is optional and brief — do not attach the breakdown unprompted.
+                - Prefer "## Matches for this question" when you need a fact, but still summarize — don't paste the whole section.
+                - For rentals, separate CURRENT daily run-rate (checked-out asset list rates) from HISTORICAL billed revenue (order net amounts).
+                - MTD / YTD / past months / past years for RENTALS MUST come from EZRentOut order history rollups — never multiply current daily rates.
+                - Monday Quote Status "Billed" means that quote was converted to a billed order. Use "## Monday quotes converted to Billed" and billedAt/billedDate — this is NOT EZRentOut rental revenue.
+                - If the user names a customer/company (e.g. Elevate), ONLY use quotes that match that name in title/customer. Never list other customers' quotes for a named-party question.
+                - Current daily on-rent is a point-in-time run-rate only; say so briefly when quoting it.
+                - Never invent people, WO numbers, rental assets, parts, quotes, or quantities.
                 - Never cite long MaintainX database ids.
-                - Short bullets. No company intro. No full recap unless asked.
-                - If the answer is not in the FACT SHEET or KNOWLEDGE EXCERPTS, say what is missing (e.g. "no matching WO/part in live pull") — do not invent.
+                - No company intro. No full recap unless asked.
+                - If the answer is not in the FACT SHEET, KNOWLEDGE EXCERPTS, or ATTACHED FILES, say what is missing — do not invent.
                 - ON_HOLD = physically finished; back office can close later. Only discuss ON_HOLD if the user asks.
                 - For policy/procedure questions, prefer KNOWLEDGE EXCERPTS and cite the document title.
+                - When ATTACHED FILES are present, prioritize reviewing their extracted text for file questions. If extract status is Empty/Unsupported, say so.
+                - Do not claim you saved a file to knowledge unless the user message or a system note says it was promoted.
                 """),
             new(
                 "user",
@@ -650,6 +756,7 @@ public sealed class OverviewService : IOverviewService
                 LIVE FACT SHEET for question (completion window = {snapshot.CompletionWindowLabel}):
                 {factSheet}
                 {knowledgeBlock}
+                {attachmentBlock}
                 {(custom is null ? "" : "\n" + custom)}
                 """)
         };
@@ -661,12 +768,21 @@ public sealed class OverviewService : IOverviewService
 
         messages.Add(new AiChatMessage(
             "user",
-            "Answer the latest user question now using the LIVE FACT SHEET and KNOWLEDGE EXCERPTS pulled for this ask. Cite WO# / document titles. Do not invent."));
+            attachedFiles.Count > 0
+                ? "Answer the latest user question now from the LIVE FACT SHEET, KNOWLEDGE EXCERPTS, and ATTACHED FILES. Keep it short and human. Do not invent."
+                : "Answer the latest user question now from the LIVE FACT SHEET and KNOWLEDGE EXCERPTS. Keep it short and human. Do not invent. Only include line-item detail if they asked for a breakdown/list/details."));
 
         var reply = (await _ai.CompleteAsync(AiTaskKind.Chat, messages, cancellationToken)).Trim();
         if (string.IsNullOrWhiteSpace(reply))
         {
             reply = "No answer returned — try rephrasing with a WO#, person name, part, or quote title.";
+        }
+
+        if (wantsPromoteAttachments)
+        {
+            var promoteNote = await PromoteAttachmentsAndSummarizeAsync(
+                organizationId, userId, attachmentIds, cancellationToken);
+            reply = string.IsNullOrWhiteSpace(promoteNote) ? reply : $"{reply.TrimEnd()}\n\n{promoteNote}";
         }
 
         await _audit.WriteAsync(
@@ -678,14 +794,17 @@ public sealed class OverviewService : IOverviewService
             JsonSerializer.Serialize(new
             {
                 turnCount = turns.Count,
-                refreshFacts = true,
+                refreshFacts = request.RefreshFacts,
+                attachmentCount = attachedFiles.Count,
+                promoted = wantsPromoteAttachments,
                 questionChars = turns[^1].Content.Length,
                 counts = snapshot.Counts
             }),
             cancellationToken);
 
         return await PersistAndReplyAsync(
-            organizationId, userId, request.SessionId, question, reply, snapshot, focus, cancellationToken);
+            organizationId, userId, request.SessionId, question, reply, snapshot, focus,
+            attachmentIds, cancellationToken);
     }
 
 
@@ -697,6 +816,7 @@ public sealed class OverviewService : IOverviewService
         string reply,
         OverviewSnapshotDto snapshot,
         OverviewFocus focus,
+        IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
     {
         var (resolvedSessionId, _) = await _askHistory.AppendTurnAsync(
@@ -706,8 +826,110 @@ public sealed class OverviewService : IOverviewService
             question,
             reply,
             cancellationToken);
+
+        if (attachmentIds.Count > 0)
+        {
+            try
+            {
+                await _askAttachments.BindToSessionAsync(
+                    organizationId, userId, resolvedSessionId, attachmentIds, cancellationToken);
+            }
+            catch
+            {
+                // Chat reply already persisted; binding is best-effort.
+            }
+        }
+
         return new OverviewChatReplyDto(DateTimeOffset.UtcNow, reply, snapshot, focus, resolvedSessionId);
     }
+
+    private static string BuildAskAttachmentBlock(
+        IReadOnlyList<(AskAttachmentDto Meta, string Text)> files)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("ATTACHED FILES:");
+        if (files.Count == 0)
+        {
+            sb.AppendLine("(none)");
+            return sb.ToString();
+        }
+
+        foreach (var (meta, text) in files)
+        {
+            sb.AppendLine(
+                $"--- {meta.FileName} ({meta.ContentType}, {meta.ByteSize} bytes, extract={meta.ExtractStatus}) ---");
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                sb.AppendLine("(no extractable text — scanned PDF or unsupported type)");
+            }
+            else
+            {
+                sb.AppendLine(text);
+            }
+
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool WantsPromoteAttachments(string question)
+    {
+        var q = question.Trim().ToLowerInvariant();
+        return q.Contains("add to knowledge") ||
+               q.Contains("save to knowledge") ||
+               q.Contains("save this to knowledge") ||
+               q.Contains("save these to knowledge") ||
+               q.Contains("put in knowledge") ||
+               q.Contains("index this") ||
+               q.Contains("index these") ||
+               q.Contains("add this file to knowledge") ||
+               q.Contains("add these files to knowledge") ||
+               q.Contains("promote to knowledge");
+    }
+
+    private async Task<string> PromoteAttachmentsAndSummarizeAsync(
+        Guid organizationId,
+        Guid userId,
+        IReadOnlyList<Guid> attachmentIds,
+        CancellationToken cancellationToken)
+    {
+        var lines = new List<string>();
+        foreach (var id in attachmentIds)
+        {
+            try
+            {
+                var promoted = await _askAttachments.PromoteToKnowledgeAsync(
+                    organizationId, userId, id, title: null, cancellationToken);
+                var doc = promoted.Knowledge?.Document;
+                lines.Add(doc is null
+                    ? $"- {promoted.Attachment.FileName}: already in knowledge (or promote skipped)."
+                    : $"- {promoted.Attachment.FileName} → knowledge \"{doc.Title}\" ({doc.Status}).");
+            }
+            catch (Exception ex)
+            {
+                lines.Add($"- Attachment {id}: promote failed — {ex.Message}");
+            }
+        }
+
+        return lines.Count == 0
+            ? string.Empty
+            : "Added to knowledge:\n" + string.Join("\n", lines);
+    }
+
+    // Compatibility overload used by recap/other callers if any remain.
+    private Task<OverviewChatReplyDto> PersistAndReplyAsync(
+        Guid organizationId,
+        Guid userId,
+        Guid? sessionId,
+        string question,
+        string reply,
+        OverviewSnapshotDto snapshot,
+        OverviewFocus focus,
+        CancellationToken cancellationToken) =>
+        PersistAndReplyAsync(
+            organizationId, userId, sessionId, question, reply, snapshot, focus, [], cancellationToken);
 
     /// <summary>
     /// For common factual questions, answer from structured data so local Llama cannot invent names/WO#s.
@@ -744,19 +966,244 @@ public sealed class OverviewService : IOverviewService
                 .OrderByDescending(g => g.Count())
                 .ThenBy(g => g.Key)
                 .First();
-            var sb = new StringBuilder();
             var scopeLabel = areaFilter is null
-                ? "physical open work in the current sample"
-                : $"physical open {areaFilter} work in the current sample";
-            sb.AppendLine($"{top.Key} has the most {scopeLabel} ({top.Count()}).");
+                ? "physical open work"
+                : $"physical open {areaFilter} work";
+            var summary = $"{top.Key} has the most {scopeLabel} right now ({top.Count()}).";
+            if (!WantsDetails(q))
+            {
+                return summary;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine(summary);
             sb.AppendLine();
-            foreach (var item in top.Take(5))
+            foreach (var item in top.Take(8))
             {
                 var area = item.Metadata?.GetValueOrDefault("area") ?? "";
                 sb.AppendLine($"- {FormatWoLabel(item)} | {area} | {item.Status} | {item.Title}");
             }
 
             return sb.ToString().Trim();
+        }
+
+        var quoteParty = FindQuotePartyFilter(q, snapshot.QuotesSample);
+        var asksQuoteConversion =
+            (q.Contains("quote") || q.Contains("monday")) &&
+            (q.Contains("converted") || q.Contains("conversion") || q.Contains("moved to billed") ||
+             q.Contains("moved to bill") ||
+             (q.Contains("billed") && !q.Contains("rent") && !q.Contains("ezrent") &&
+              !q.Contains("on-rent") && !q.Contains("on rent") && !q.Contains("asset")) ||
+             (quoteParty is not null &&
+              (q.Contains("detail") || q.Contains("those") || q.Contains("more about"))));
+        if (asksQuoteConversion && snapshot.QuotesSample.Count > 0)
+        {
+            var period = DetectEzHistoryPeriod(q);
+            var billedRows = snapshot.QuotesSample
+                .Where(x => string.Equals(x.Status, "Billed", StringComparison.OrdinalIgnoreCase) ||
+                            x.Metadata?.GetValueOrDefault("bucket") == "billed")
+                .Select(x =>
+                {
+                    DateTimeOffset? when = null;
+                    if (DateTimeOffset.TryParse(x.Metadata?.GetValueOrDefault("billedAt"), out var billedAt))
+                    {
+                        when = billedAt;
+                    }
+
+                    return (Quote: x, When: when);
+                })
+                .Where(x => x.When is not null)
+                .Where(x => quoteParty is null || QuoteMatchesParty(x.Quote, quoteParty))
+                .ToList();
+
+            string periodLabel;
+            List<(ExternalWorkItemDto Quote, DateTimeOffset? When)> billedInPeriod;
+            if (period is not null)
+            {
+                periodLabel = period.Label;
+                billedInPeriod = billedRows
+                    .Where(x => x.When >= period.Start && x.When < period.EndExclusive)
+                    .OrderBy(x => x.When)
+                    .ToList();
+            }
+            else if (quoteParty is not null &&
+                     (q.Contains("detail") || q.Contains("those") || q.Contains("more about")))
+            {
+                // Follow-up without a month: show that party's recent billed conversions (not everyone else's).
+                periodLabel = "recent periods";
+                billedInPeriod = billedRows.OrderByDescending(x => x.When).Take(40).OrderBy(x => x.When).ToList();
+            }
+            else
+            {
+                period = DefaultHistoryPeriod();
+                periodLabel = period.Label;
+                billedInPeriod = billedRows
+                    .Where(x => x.When >= period.Start && x.When < period.EndExclusive)
+                    .OrderBy(x => x.When)
+                    .ToList();
+            }
+
+            var partyBit = quoteParty is null ? "" : $" for {quoteParty}";
+            var totalAmount = billedInPeriod.Sum(x =>
+                decimal.TryParse(x.Quote.Metadata?.GetValueOrDefault("amount"), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out var amt)
+                    ? amt
+                    : 0m);
+            var amountBit = totalAmount > 0 ? $" (~${totalAmount:0.##} quote $)" : "";
+            var summary = billedInPeriod.Count == 0
+                ? $"No Monday quotes{partyBit} moved to Billed in {periodLabel}."
+                : $"{billedInPeriod.Count} Monday quote(s){partyBit} converted to Billed in {periodLabel}{amountBit}.";
+            if (!WantsDetails(q) && !q.Contains("which") && !q.Contains("list") && !q.Contains("show") &&
+                !q.Contains("those") && !q.Contains("more about"))
+            {
+                return summary;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine(summary);
+            if (billedInPeriod.Count == 0)
+            {
+                return sb.ToString().Trim();
+            }
+
+            sb.AppendLine();
+            foreach (var row in billedInPeriod.Take(40))
+            {
+                sb.AppendLine($"- {FormatBilledQuoteLine(row.Quote)}");
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        var asksRentals = q.Contains("ezrent") || q.Contains("ez rent") || q.Contains("rental") ||
+                          q.Contains("checked out") || q.Contains("check out") || q.Contains("overdue return") ||
+                          q.Contains("on rent") || q.Contains("on-rent") ||
+                          q.Contains("mtd") || q.Contains("ytd") || q.Contains("month to date") ||
+                          q.Contains("year to date") ||
+                          ((q.Contains("daily") || q.Contains("monthly") || q.Contains("yearly") ||
+                            q.Contains("annual") || q.Contains("weekly") || q.Contains("dollar") ||
+                            q.Contains("$") || q.Contains("total") || q.Contains("revenue") ||
+                            q.Contains("billed") || q.Contains("billing")) &&
+                           (q.Contains("rent") || q.Contains("asset") || q.Contains("equipment") ||
+                            q.Contains("customer") || q.Contains("on rent") || q.Contains("order")) &&
+                           !q.Contains("quote") && !q.Contains("monday") && !q.Contains("converted")) ||
+                          (q.Contains("overdue") && (q.Contains("asset") || q.Contains("equipment") || q.Contains("rent")));
+        var ezItems = snapshot.ExternalWorkSample
+            .Where(i => string.Equals(i.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var ezOrders = snapshot.EzRentOrders ?? [];
+        var ezRollupsForMatch = ezItems.Count > 0 ? BuildEzCustomerRollups(ezItems) : [];
+        var namedCustomer = FindEzCustomerMatch(
+            q,
+            ezRollupsForMatch.Concat(
+                BuildEzOrderCustomerNames(ezOrders).Select(c =>
+                    new EzCustomerRollup(c, 0, 0, 0, 0, 0, 0, 0, []))).ToList());
+        var wantsRentalMoney = q.Contains("dollar") || q.Contains("$") || q.Contains("daily") ||
+                               q.Contains("weekly") || q.Contains("monthly") || q.Contains("yearly") ||
+                               q.Contains("annual") || q.Contains("per month") || q.Contains("per year") ||
+                               q.Contains("per day") || q.Contains("rate") || q.Contains("revenue") ||
+                               q.Contains("amount") || q.Contains("total") || q.Contains("on rent") ||
+                               q.Contains("on-rent") || q.Contains("billing") || q.Contains("billed") ||
+                               q.Contains("price") || q.Contains("mtd") || q.Contains("ytd") ||
+                               q.Contains("month to date") || q.Contains("year to date");
+        if ((ezItems.Count > 0 || ezOrders.Count > 0) &&
+            (asksRentals || (namedCustomer is not null && wantsRentalMoney)))
+        {
+            var historyPeriod = DetectEzHistoryPeriod(q);
+            var wantsCurrentDaily = (q.Contains("daily") || q.Contains("per day") || q.Contains("/day") ||
+                                     q.Contains("run rate") || q.Contains("run-rate") ||
+                                     ((q.Contains("on rent") || q.Contains("on-rent")) &&
+                                      !q.Contains("month") && !q.Contains("year") && !q.Contains("mtd") &&
+                                      !q.Contains("ytd") && !q.Contains("billed") && !q.Contains("revenue"))) &&
+                                    historyPeriod is null;
+            var asksLocation = q.Contains("location") || q.Contains("permi") || q.Contains("northern") ||
+                               q.Contains("shop") || q.Contains("where");
+
+            if (wantsRentalMoney && historyPeriod is not null)
+            {
+                if (namedCustomer is null && LooksLikeNamedCustomerQuestion(q, null))
+                {
+                    return BuildEzCustomerMissReply(q, ezRollupsForMatch);
+                }
+
+                return BuildEzHistoryMoneyReply(ezOrders, namedCustomer?.Customer, historyPeriod, q);
+            }
+
+            if (wantsRentalMoney && !wantsCurrentDaily)
+            {
+                if (namedCustomer is null && LooksLikeNamedCustomerQuestion(q, null))
+                {
+                    return BuildEzCustomerMissReply(q, ezRollupsForMatch);
+                }
+
+                // Default money questions (monthly/yearly/total/revenue) → historical MTD + YTD + recent months.
+                return BuildEzHistoryMoneyReply(
+                    ezOrders,
+                    namedCustomer?.Customer,
+                    DetectEzHistoryPeriod(q) ?? DefaultHistoryPeriod(),
+                    q);
+            }
+
+            if (wantsRentalMoney && wantsCurrentDaily && ezItems.Count > 0)
+            {
+                if (namedCustomer is null && LooksLikeNamedCustomerQuestion(q, null))
+                {
+                    return BuildEzCustomerMissReply(q, ezRollupsForMatch);
+                }
+
+                return BuildEzCurrentDailyReply(ezItems, ezRollupsForMatch, namedCustomer, q);
+            }
+
+            if (asksLocation && ezItems.Count > 0)
+            {
+                return BuildEzLocationReply(namedCustomer?.Items ?? ezItems, namedCustomer?.Customer, q);
+            }
+
+            var overdue = ezItems
+                .Where(i => string.Equals(i.Status, "Overdue return", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(i => i.DueAt ?? DateTimeOffset.MaxValue)
+                .ToList();
+            var onlyOverdue = q.Contains("overdue") && !q.Contains("checked out");
+            var scoped = namedCustomer?.Items ?? ezItems;
+            var listAssets = onlyOverdue
+                ? overdue.Where(i => namedCustomer is null ||
+                    string.Equals(i.Assignee, namedCustomer.Customer, StringComparison.OrdinalIgnoreCase)).ToList()
+                : scoped.OrderByDescending(ReadDailyRate).ThenBy(i => i.DueAt ?? DateTimeOffset.MaxValue).ToList();
+            if (listAssets.Count == 0 && ezOrders.Count == 0)
+            {
+                return namedCustomer is null
+                    ? "No EZRentOut checked-out assets or orders in the current pull."
+                    : $"No matching EZRentOut assets for {namedCustomer.Customer} in the current pull.";
+            }
+
+            if (listAssets.Count == 0)
+            {
+                return BuildEzHistoryMoneyReply(
+                    ezOrders,
+                    namedCustomer?.Customer,
+                    DefaultHistoryPeriod(),
+                    q);
+            }
+
+            var daily = listAssets.Sum(ReadDailyRate);
+            var summary = namedCustomer is null
+                ? $"EZRentOut has {ezItems.Count} assets checked out ({overdue.Count} overdue) at about ${daily:0.##}/day right now."
+                : $"{namedCustomer.Customer} has {listAssets.Count} assets checked out at about ${daily:0.##}/day right now.";
+            if (!WantsDetails(q))
+            {
+                return summary;
+            }
+
+            var sbAssets = new StringBuilder();
+            sbAssets.AppendLine(summary);
+            sbAssets.AppendLine();
+            sbAssets.AppendLine(onlyOverdue ? "Overdue returns:" : "Checked out (highest daily $ first):");
+            foreach (var item in listAssets.Take(16))
+            {
+                sbAssets.AppendLine($"- {FormatWorkLine(item)}");
+            }
+
+            return sbAssets.ToString().Trim();
         }
 
         var asksInventory = q.Contains("inventory") || q.Contains("out of stock") || q.Contains("shortage") ||
@@ -767,9 +1214,15 @@ public sealed class OverviewService : IOverviewService
             var onlyOut = (q.Contains("out") || q.Contains("shortage")) && !q.Contains("low");
             var wantOut = !onlyLow;
             var wantLow = !onlyOut;
+            var summary =
+                $"Inventory is at {snapshot.Counts.InventoryOut} out and {snapshot.Counts.InventoryLow} low right now.";
+            if (!WantsDetails(q))
+            {
+                return summary;
+            }
+
             var sb = new StringBuilder();
-            sb.AppendLine(
-                $"Inventory totals: out={snapshot.Counts.InventoryOut}, low={snapshot.Counts.InventoryLow}.");
+            sb.AppendLine(summary);
             sb.AppendLine();
             if (wantOut)
             {
@@ -811,8 +1264,15 @@ public sealed class OverviewService : IOverviewService
                 .OrderByDescending(x => int.TryParse(x.Metadata?.GetValueOrDefault("ageDays"), out var d) ? d : 0)
                 .Take(8)
                 .ToList();
+            var summary = $"There are {snapshot.Counts.AgingQuotes} aging quotes right now.";
+            if (!WantsDetails(q))
+            {
+                return summary;
+            }
+
             var sb = new StringBuilder();
-            sb.AppendLine($"Aging quotes (Sent/Draft ≥ threshold): {snapshot.Counts.AgingQuotes} total; showing {aging.Count}.");
+            sb.AppendLine(summary);
+            sb.AppendLine();
             foreach (var quote in aging)
             {
                 var age = quote.Metadata?.GetValueOrDefault("ageDays") ?? "?";
@@ -836,14 +1296,61 @@ public sealed class OverviewService : IOverviewService
         CancellationToken cancellationToken)
     {
         var cacheKey = $"{organizationId:N}:{FocusCacheKey(focus)}";
-        if (!refreshFacts &&
-            SnapshotCache.TryGetValue(cacheKey, out var cached) &&
-            cached.ExpiresAt > DateTimeOffset.UtcNow)
+        var useSharedOps = OpsSnapshotFocus.IsCompatibleWithDefault(focus) ||
+                           FocusCacheKey(focus) == FocusCacheKey(OpsSnapshotFocus.CreateDefault());
+
+        if (!refreshFacts)
         {
-            return cached.Snapshot;
+            if (SnapshotCache.TryGetValue(cacheKey, out var cached) &&
+                cached.ExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return cached.Snapshot;
+            }
+
+            if (_opsSnapshotOptions.Enabled && useSharedOps)
+            {
+                var stored = await _opsSnapshots.TryGetFreshAsync(
+                    organizationId,
+                    IOpsSnapshotStore.DefaultFocusKey,
+                    cancellationToken);
+                if (stored is not null)
+                {
+                    SnapshotCache[cacheKey] = (stored, DateTimeOffset.UtcNow.Add(SnapshotCacheTtl));
+                    return stored;
+                }
+            }
         }
 
         var snapshot = await GetSnapshotAsync(organizationId, userId, focus, cancellationToken);
+
+        if (_opsSnapshotOptions.Enabled && useSharedOps)
+        {
+            try
+            {
+                var ttl = TimeSpan.FromMinutes(Math.Clamp(_opsSnapshotOptions.TimeToLiveMinutes, 2, 240));
+                var notes = snapshot.Notes.ToList();
+                if (!notes.Any(n => n.Contains("Shared DB ops snapshot", StringComparison.OrdinalIgnoreCase)))
+                {
+                    notes.Insert(
+                        0,
+                        $"Shared DB ops snapshot generated {snapshot.GeneratedAt:u} " +
+                        "(live rebuild; saved for all users until next refresh).");
+                    snapshot = snapshot with { Notes = notes };
+                }
+
+                await _opsSnapshots.UpsertReadyAsync(
+                    organizationId,
+                    IOpsSnapshotStore.DefaultFocusKey,
+                    snapshot,
+                    ttl,
+                    cancellationToken);
+            }
+            catch
+            {
+                // Serving the live snapshot is enough if persistence fails.
+            }
+        }
+
         SnapshotCache[cacheKey] = (snapshot, DateTimeOffset.UtcNow.Add(SnapshotCacheTtl));
         return snapshot;
     }
@@ -930,6 +1437,9 @@ public sealed class OverviewService : IOverviewService
         var mxPhysical = snapshot.ExternalWorkSample
             .Where(i => i.SourceSystem == "MaintainX" && IsPhysicalActive(i))
             .ToList();
+        var ezRentals = snapshot.ExternalWorkSample
+            .Where(i => string.Equals(i.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
         sb.AppendLine("## Workload by person (physical OPEN/IN_PROGRESS)");
         foreach (var group in mxPhysical
@@ -950,11 +1460,52 @@ public sealed class OverviewService : IOverviewService
             sb.AppendLine($"- {group.Key}: {group.Count()} physical");
         }
 
+        if (ezRentals.Count > 0 || snapshot.EzRentOrders.Count > 0)
+        {
+            var overdueCount = ezRentals.Count(i =>
+                string.Equals(i.Status, "Overdue return", StringComparison.OrdinalIgnoreCase));
+            var dailyTotal = ezRentals.Sum(ReadDailyRate);
+            var now = DateTimeOffset.UtcNow;
+            sb.AppendLine();
+            sb.AppendLine("## EZRentOut");
+            sb.AppendLine(
+                $"Current checked-out assets: {ezRentals.Count} ({overdueCount} overdue); " +
+                $"daily run-rate ${dailyTotal:0.##}/day (point-in-time list rates — NOT MTD/YTD).");
+            if (ezRentals.Count > 0)
+            {
+                sb.AppendLine("### Current on-rent by customer (daily run-rate)");
+                foreach (var row in BuildEzCustomerRollups(ezRentals).OrderByDescending(r => r.DailyTotal).Take(20))
+                {
+                    sb.AppendLine(
+                        $"- {row.Customer}: ${row.DailyTotal:0.##}/day | {row.AssetCount} assets" +
+                        (row.OverdueCount > 0 ? $" | {row.OverdueCount} overdue" : ""));
+                }
+            }
+
+            AppendEzHistoryFactSheet(sb, snapshot.EzRentOrders, customer: FindEzCustomerMatch(
+                question,
+                BuildEzCustomerRollups(ezRentals).Concat(
+                    BuildEzOrderCustomerNames(snapshot.EzRentOrders).Select(c =>
+                        new EzCustomerRollup(c, 0, 0, 0, 0, 0, 0, 0, []))).ToList())?.Customer);
+        }
+
+        AppendMondayBilledFactSheet(
+            sb,
+            snapshot.QuotesSample,
+            FindQuotePartyFilter(question, snapshot.QuotesSample));
+
         var scoredWork = mxPhysical
             .Select(i => (Item: i, Score: ScoreHaystack(WorkItemHaystack(i), terms)))
             .Where(x => x.Score > 0)
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Item.Title)
+            .ToList();
+
+        var scoredRentals = ezRentals
+            .Select(i => (Item: i, Score: ScoreHaystack(WorkItemHaystack(i), terms)))
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Item.DueAt ?? DateTimeOffset.MaxValue)
             .ToList();
 
         var scoredCompleted = snapshot.RecentlyCompleted
@@ -976,7 +1527,7 @@ public sealed class OverviewService : IOverviewService
             .ThenBy(x => x.Item.AvailableQuantity)
             .ToList();
 
-        var hasMatches = scoredWork.Count > 0 || scoredCompleted.Count > 0 ||
+        var hasMatches = scoredWork.Count > 0 || scoredRentals.Count > 0 || scoredCompleted.Count > 0 ||
                          scoredQuotes.Count > 0 || scoredInventory.Count > 0;
 
         if (terms.Count > 0 && hasMatches)
@@ -986,6 +1537,11 @@ public sealed class OverviewService : IOverviewService
             foreach (var hit in scoredWork.Take(28))
             {
                 sb.AppendLine($"- {FormatWorkLine(hit.Item)}");
+            }
+
+            foreach (var hit in scoredRentals.Take(16))
+            {
+                sb.AppendLine($"- RENTAL | {FormatWorkLine(hit.Item)}");
             }
 
             foreach (var hit in scoredCompleted.Take(12))
@@ -1007,7 +1563,7 @@ public sealed class OverviewService : IOverviewService
         {
             sb.AppendLine();
             sb.AppendLine("## Matches for this question");
-            sb.AppendLine("- (no WO / quote / inventory rows matched the question tokens — see rollups and lists below)");
+            sb.AppendLine("- (no WO / rental / quote / inventory rows matched the question tokens — see rollups and lists below)");
         }
 
         var matchedIds = scoredWork.Select(x => x.Item.ExternalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1019,6 +1575,29 @@ public sealed class OverviewService : IOverviewService
         foreach (var item in remaining)
         {
             sb.AppendLine($"- {FormatWorkLine(item)}");
+        }
+
+        if (ezRentals.Count > 0)
+        {
+            var rentalMatched = scoredRentals.Select(x => x.Item.ExternalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var customerMatch = FindEzCustomerMatch(question, BuildEzCustomerRollups(ezRentals));
+            sb.AppendLine();
+            sb.AppendLine("## EZRentOut checked-out assets");
+            IEnumerable<ExternalWorkItemDto> rentalLines = ezRentals
+                .Where(i => !rentalMatched.Contains(i.ExternalId));
+            if (customerMatch is not null)
+            {
+                rentalLines = customerMatch.Items.Where(i => !rentalMatched.Contains(i.ExternalId));
+                sb.AppendLine($"Filtered to customer: {customerMatch.Customer} (${customerMatch.DailyTotal:0.##}/day).");
+            }
+
+            foreach (var item in rentalLines
+                         .OrderByDescending(ReadDailyRate)
+                         .ThenBy(i => i.DueAt ?? DateTimeOffset.MaxValue)
+                         .Take(customerMatch is not null ? 30 : (terms.Count > 0 && scoredRentals.Count > 0 ? 12 : 20)))
+            {
+                sb.AppendLine($"- {FormatWorkLine(item)}");
+            }
         }
 
         if (snapshot.RecentlyCompleted.Count > 0)
@@ -1115,6 +1694,21 @@ public sealed class OverviewService : IOverviewService
 
     private static string FormatWorkLine(ExternalWorkItemDto item)
     {
+        if (string.Equals(item.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+        {
+            var due = item.DueAt?.ToString("yyyy-MM-dd") ?? "no due date";
+            var customer = item.Assignee
+                ?? item.Metadata?.GetValueOrDefault("customer")
+                ?? "Unassigned customer";
+            var daily = item.Metadata?.GetValueOrDefault("dailyRate");
+            var monthly = FormatMoneyAmount(ReadMonthlyRate(item));
+            var dailyBit = string.IsNullOrWhiteSpace(daily) ? "" : $" | ${daily}/day";
+            var monthlyBit = string.IsNullOrWhiteSpace(monthly) ? "" : $" | ${monthly}/mo";
+            var location = item.Metadata?.GetValueOrDefault("location");
+            var locationBit = string.IsNullOrWhiteSpace(location) ? "" : $" | {location}";
+            return $"{FormatAssetLabel(item)} | {customer}{dailyBit}{monthlyBit} | {item.Status} | due={due}{locationBit} | {item.Title}";
+        }
+
         var area = item.Metadata?.GetValueOrDefault("area") ?? "";
         var who = string.IsNullOrWhiteSpace(item.Assignee) ? "Unassigned" : item.Assignee;
         var quoteBit = string.IsNullOrWhiteSpace(item.Metadata?.GetValueOrDefault("linkedQuotes"))
@@ -1146,6 +1740,28 @@ public sealed class OverviewService : IOverviewService
         var scope = quote.Metadata?.GetValueOrDefault("scopeOfWork");
         var scopeBit = string.IsNullOrWhiteSpace(scope) ? "" : $" || scope: {scope}";
         return $"[{quote.Status}] {age}d{regionBit}{numberBit}{amountBit}{customerBit}{projectBit}{linesBit} | {owner}: {quote.Title}{FormatQuoteMxLink(quote)}{scopeBit}{summaryBit}";
+    }
+
+    private static string FormatBilledQuoteLine(ExternalWorkItemDto quote)
+    {
+        var billedDate = quote.Metadata?.GetValueOrDefault("billedDate");
+        var dateBit = string.IsNullOrWhiteSpace(billedDate) ? "" : $" billed {billedDate}";
+        var number = quote.Metadata?.GetValueOrDefault("quoteNumber");
+        var numberBit = string.IsNullOrWhiteSpace(number) ? "" : $" #{number}";
+        var amount = quote.Metadata?.GetValueOrDefault("amountText");
+        var amountBit = string.IsNullOrWhiteSpace(amount) ? "" : $" | {amount}";
+        var region = quote.Metadata?.GetValueOrDefault("region");
+        var regionBit = string.IsNullOrWhiteSpace(region) ? "" : $" | {region}";
+        var owner = string.IsNullOrWhiteSpace(quote.Assignee) ? "Unassigned" : quote.Assignee;
+        var so = quote.Metadata?.GetValueOrDefault("soNumber");
+        var soBit = string.IsNullOrWhiteSpace(so) ? "" : $" | SO {so}";
+        var sap = quote.Metadata?.GetValueOrDefault("sapInvoice");
+        var sapBit = string.IsNullOrWhiteSpace(sap) ? "" : $" | SAP {sap}";
+        var po = quote.Metadata?.GetValueOrDefault("poNumber");
+        var poBit = string.IsNullOrWhiteSpace(po) ? "" : $" | PO {po}";
+        var type = quote.Metadata?.GetValueOrDefault("quoteType");
+        var typeBit = string.IsNullOrWhiteSpace(type) ? "" : $" | {type}";
+        return $"[{quote.Status}]{dateBit}{numberBit}{amountBit}{regionBit}{typeBit}{soBit}{sapBit}{poBit} | {owner}: {quote.Title}";
     }
 
     private static List<string> TokenizeQuestion(string? question)
@@ -1196,9 +1812,11 @@ public sealed class OverviewService : IOverviewService
         return score;
     }
 
-    private static string WorkItemHaystack(ExternalWorkItemDto item) =>
-        string.Join(
-            ' ',
+    private static string WorkItemHaystack(ExternalWorkItemDto item)
+    {
+        var parts = new List<string?>
+        {
+            item.SourceSystem,
             item.Title,
             item.Assignee,
             item.Status,
@@ -1206,10 +1824,28 @@ public sealed class OverviewService : IOverviewService
             FormatWoLabel(item),
             item.Metadata?.GetValueOrDefault("area"),
             item.Metadata?.GetValueOrDefault("sequentialId"),
+            item.Metadata?.GetValueOrDefault("assetName"),
+            item.Metadata?.GetValueOrDefault("rawState"),
+            item.Metadata?.GetValueOrDefault("checkoutOn"),
             item.Metadata?.GetValueOrDefault("description"),
             item.Metadata?.GetValueOrDefault("comments"),
             item.Metadata?.GetValueOrDefault("linkedQuotes"),
-            item.Metadata?.GetValueOrDefault("rawStatus"));
+            item.Metadata?.GetValueOrDefault("rawStatus"),
+        };
+
+        if (string.Equals(item.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add(FormatAssetLabel(item));
+            parts.Add(item.Metadata?.GetValueOrDefault("customer"));
+            parts.Add(item.Metadata?.GetValueOrDefault("location"));
+            parts.Add(item.Metadata?.GetValueOrDefault("dailyRate"));
+            parts.Add(item.Metadata?.GetValueOrDefault("monthlyRate"));
+            parts.Add(item.Metadata?.GetValueOrDefault("weeklyRate"));
+            parts.Add("ezrentout rental checked out asset equipment on rent daily monthly yearly annual");
+        }
+
+        return string.Join(' ', parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+    }
 
     private static string QuoteHaystack(ExternalWorkItemDto quote) =>
         string.Join(
@@ -1229,11 +1865,17 @@ public sealed class OverviewService : IOverviewService
             quote.Metadata?.GetValueOrDefault("amountText"),
             quote.Metadata?.GetValueOrDefault("poNumber"),
             quote.Metadata?.GetValueOrDefault("soNumber"),
+            quote.Metadata?.GetValueOrDefault("sapInvoice"),
+            quote.Metadata?.GetValueOrDefault("billedAt"),
+            quote.Metadata?.GetValueOrDefault("billedMonth"),
+            quote.Metadata?.GetValueOrDefault("billedDate"),
+            quote.Metadata?.GetValueOrDefault("bucket"),
             quote.Metadata?.GetValueOrDefault("partsLabor"),
             quote.Metadata?.GetValueOrDefault("dayRate"),
             quote.Metadata?.GetValueOrDefault("maintainXWoNumber"),
             quote.Metadata?.GetValueOrDefault("maintainXTitle"),
-            quote.Metadata?.GetValueOrDefault("maintainXAssignee"));
+            quote.Metadata?.GetValueOrDefault("maintainXAssignee"),
+            "converted billed monday quote");
 
     private static string InventoryHaystack(InventoryAlertDto alert) =>
         string.Join(' ', alert.Name, alert.EnvironmentName, alert.Area, alert.PartId, alert.Severity);
@@ -1419,11 +2061,54 @@ public sealed class OverviewService : IOverviewService
                 q => q.Metadata?.GetValueOrDefault("crossRefOnHoldMaintainX") == "true");
             QuoteBucket("Draft opportunities", q => q.Metadata?.GetValueOrDefault("bucket") == "draft_opportunity");
             QuoteBucket(
+                "Ready to be billed",
+                q => q.Metadata?.GetValueOrDefault("bucket") == "ready_to_bill" ||
+                     string.Equals(q.Status, "Ready to be Billed", StringComparison.OrdinalIgnoreCase));
+            QuoteBucket(
                 "Other MX-linked",
                 q => !string.IsNullOrWhiteSpace(q.Metadata?.GetValueOrDefault("maintainXWorkOrderId"))
                      && q.Metadata?.GetValueOrDefault("crossRefPhysicalMaintainX") != "true"
                      && q.Metadata?.GetValueOrDefault("crossRefOnHoldMaintainX") != "true");
             QuoteBucket("Other pipeline", q => q.Metadata?.GetValueOrDefault("bucket") == "pipeline");
+        }
+
+        AppendMondayBilledFactSheet(sb, quotes, partyFilter: null);
+
+        sb.AppendLine();
+        sb.AppendLine("## EZRentOut");
+        var ezRentals = snapshot.ExternalWorkSample
+            .Where(i => string.Equals(i.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (ezRentals.Count == 0 && snapshot.EzRentOrders.Count == 0)
+        {
+            sb.AppendLine("- none (or source disabled)");
+        }
+        else
+        {
+            var overdue = ezRentals.Count(i =>
+                string.Equals(i.Status, "Overdue return", StringComparison.OrdinalIgnoreCase));
+            var dailyTotal = ezRentals.Sum(ReadDailyRate);
+            sb.AppendLine(
+                $"Current checked-out assets: {ezRentals.Count} ({overdue} overdue); " +
+                $"daily run-rate ${dailyTotal:0.##}/day (point-in-time — NOT historical MTD/YTD).");
+            if (ezRentals.Count > 0)
+            {
+                sb.AppendLine("Current on-rent by customer (daily run-rate):");
+                foreach (var row in BuildEzCustomerRollups(ezRentals).OrderByDescending(r => r.DailyTotal).Take(20))
+                {
+                    sb.AppendLine(
+                        $"  - {row.Customer}: ${row.DailyTotal:0.##}/day | {row.AssetCount} assets" +
+                        (row.OverdueCount > 0 ? $" | {row.OverdueCount} overdue" : ""));
+                }
+
+                sb.AppendLine("Sample assets (highest daily $):");
+                foreach (var item in ezRentals.OrderByDescending(ReadDailyRate).Take(12))
+                {
+                    sb.AppendLine($"  - {FormatWorkLine(item)}");
+                }
+            }
+
+            AppendEzHistoryFactSheet(sb, snapshot.EzRentOrders, customer: null);
         }
 
         sb.AppendLine();
@@ -1500,8 +2185,31 @@ public sealed class OverviewService : IOverviewService
 
     private static string FormatWoLabel(ExternalWorkItemDto item)
     {
+        if (string.Equals(item.SourceSystem, "EZRentOut", StringComparison.OrdinalIgnoreCase))
+        {
+            return FormatAssetLabel(item);
+        }
+
         var seq = item.Metadata?.GetValueOrDefault("sequentialId");
         return !string.IsNullOrWhiteSpace(seq) ? $"WO#{seq}" : "WO#(unknown)";
+    }
+
+    private static string FormatAssetLabel(ExternalWorkItemDto item)
+    {
+        var name = item.Metadata?.GetValueOrDefault("assetName");
+        if (!string.IsNullOrWhiteSpace(name) &&
+            !string.IsNullOrWhiteSpace(item.ExternalId) &&
+            !string.Equals(name, item.ExternalId, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Asset:{name} ({item.ExternalId})";
+        }
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return $"Asset:{name}";
+        }
+
+        return string.IsNullOrWhiteSpace(item.ExternalId) ? "Asset:(unknown)" : $"Asset:{item.ExternalId}";
     }
 
     private static string FormatQuoteMxLink(ExternalWorkItemDto quote)
@@ -1570,5 +2278,817 @@ public sealed class OverviewService : IOverviewService
         var raw = RawStatus(item);
         return raw.Equals("ON_HOLD", StringComparison.OrdinalIgnoreCase)
                || raw.Equals("ON HOLD", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record EzCustomerRollup(
+        string Customer,
+        decimal DailyTotal,
+        decimal WeeklyTotal,
+        decimal MonthlyTotal,
+        decimal YearlyTotal,
+        decimal RentCollectedTotal,
+        int AssetCount,
+        int OverdueCount,
+        IReadOnlyList<ExternalWorkItemDto> Items);
+
+    private sealed record EzLocationRollup(
+        string Location,
+        decimal DailyTotal,
+        decimal MonthlyTotal,
+        decimal YearlyTotal,
+        int AssetCount);
+
+    private sealed record EzHistoryPeriod(string Label, DateTimeOffset Start, DateTimeOffset EndExclusive);
+
+    private static DateTimeOffset StartOfMonth(DateTimeOffset at) =>
+        new(at.Year, at.Month, 1, 0, 0, 0, TimeSpan.Zero);
+
+    private static DateTimeOffset StartOfYear(DateTimeOffset at) =>
+        new(at.Year, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    private static EzHistoryPeriod DefaultHistoryPeriod()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new EzHistoryPeriod("MTD", StartOfMonth(now), StartOfMonth(now).AddMonths(1));
+    }
+
+    private static EzHistoryPeriod? DetectEzHistoryPeriod(string q)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (q.Contains("mtd") || q.Contains("month to date") || q.Contains("month-to-date"))
+        {
+            return new EzHistoryPeriod("MTD", StartOfMonth(now), StartOfMonth(now).AddMonths(1));
+        }
+
+        if (q.Contains("ytd") || q.Contains("year to date") || q.Contains("year-to-date"))
+        {
+            return new EzHistoryPeriod("YTD", StartOfYear(now), StartOfYear(now).AddYears(1));
+        }
+
+        if (q.Contains("last month") || q.Contains("prior month") || q.Contains("previous month"))
+        {
+            var start = StartOfMonth(now).AddMonths(-1);
+            return new EzHistoryPeriod(start.ToString("MMM yyyy"), start, start.AddMonths(1));
+        }
+
+        if (q.Contains("last year") || q.Contains("prior year") || q.Contains("previous year"))
+        {
+            var start = StartOfYear(now).AddYears(-1);
+            return new EzHistoryPeriod(start.Year.ToString(), start, start.AddYears(1));
+        }
+
+        // Explicit calendar year: "2025", "in 2024"
+        for (var year = now.Year; year >= now.Year - 5; year--)
+        {
+            if (q.Contains(year.ToString()) &&
+                (q.Contains("year") || q.Contains("annual") || q.Contains("yearly") ||
+                 q.Contains(" in ") || q.Contains(" for ") || q.Trim() == year.ToString() ||
+                 q.Contains($" {year}") || q.Contains($"{year} ")))
+            {
+                var start = new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                return new EzHistoryPeriod(year.ToString(), start, start.AddYears(1));
+            }
+        }
+
+        var months = new (string Key, int Month)[]
+        {
+            ("january", 1), ("jan", 1), ("february", 2), ("feb", 2), ("march", 3), ("mar", 3),
+            ("april", 4), ("apr", 4), ("may", 5), ("june", 6), ("jun", 6), ("july", 7), ("jul", 7),
+            ("august", 8), ("aug", 8), ("september", 9), ("sep", 9), ("october", 10), ("oct", 10),
+            ("november", 11), ("nov", 11), ("december", 12), ("dec", 12),
+        };
+        foreach (var (key, month) in months.OrderByDescending(m => m.Key.Length))
+        {
+            if (!q.Contains(key))
+            {
+                continue;
+            }
+
+            var year = now.Year;
+            for (var y = now.Year; y >= now.Year - 3; y--)
+            {
+                if (q.Contains(y.ToString()))
+                {
+                    year = y;
+                    break;
+                }
+            }
+
+            // If this month is in the future for current year (e.g. asking December in July), use prior year.
+            if (year == now.Year && month > now.Month)
+            {
+                year--;
+            }
+
+            var start = new DateTimeOffset(year, month, 1, 0, 0, 0, TimeSpan.Zero);
+            return new EzHistoryPeriod(start.ToString("MMM yyyy"), start, start.AddMonths(1));
+        }
+
+        if (q.Contains("yearly") || q.Contains("annual") || q.Contains("per year") ||
+            (q.Contains("year") && (q.Contains("total") || q.Contains("revenue") || q.Contains("billed"))))
+        {
+            return new EzHistoryPeriod("YTD", StartOfYear(now), StartOfYear(now).AddYears(1));
+        }
+
+        if (q.Contains("monthly") || q.Contains("per month") ||
+            (q.Contains("month") && (q.Contains("total") || q.Contains("revenue") || q.Contains("billed"))))
+        {
+            return new EzHistoryPeriod("MTD", StartOfMonth(now), StartOfMonth(now).AddMonths(1));
+        }
+
+        return null;
+    }
+
+    private static decimal ReadMetaDecimal(ExternalWorkItemDto item, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var raw = item.Metadata?.GetValueOrDefault(key);
+            if (decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value))
+            {
+                return value;
+            }
+        }
+
+        return 0m;
+    }
+
+    private static decimal ReadDailyRate(ExternalWorkItemDto item) =>
+        ReadMetaDecimal(item, "dailyRateValue", "dailyRate");
+
+    private static decimal ReadMonthlyRate(ExternalWorkItemDto item)
+    {
+        var listed = ReadMetaDecimal(item, "monthlyRateValue", "monthlyRate");
+        return listed > 0 ? listed : ReadDailyRate(item) * 30m;
+    }
+
+    private static decimal ReadRentCollected(ExternalWorkItemDto item) =>
+        ReadMetaDecimal(item, "rentCollectedValue", "rentCollected");
+
+    private static string FormatMoneyAmount(decimal value) =>
+        value.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Historical billed revenue: prorate each order's net_amount across bill_from→bill_to days.
+    /// </summary>
+    private static decimal SumOrderRevenue(
+        IEnumerable<EzRentOrderDto> orders,
+        DateTimeOffset start,
+        DateTimeOffset endExclusive,
+        string? customer = null)
+    {
+        decimal total = 0m;
+        foreach (var order in orders)
+        {
+            if (!string.IsNullOrWhiteSpace(customer) &&
+                !string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase) &&
+                !order.Customer.Contains(customer, StringComparison.OrdinalIgnoreCase) &&
+                !customer.Contains(order.Customer, StringComparison.OrdinalIgnoreCase))
+            {
+                // allow compact match via caller passing exact customer from FindEzCustomerMatch
+                var compactOrder = new string(order.Customer.Where(char.IsLetterOrDigit).ToArray());
+                var compactWanted = new string(customer.Where(char.IsLetterOrDigit).ToArray());
+                if (compactWanted.Length < 3 ||
+                    !compactOrder.Contains(compactWanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+
+            total += ProrateOrderAmount(order, start, endExclusive);
+        }
+
+        return total;
+    }
+
+    private static decimal ProrateOrderAmount(
+        EzRentOrderDto order,
+        DateTimeOffset start,
+        DateTimeOffset endExclusive)
+    {
+        if (order.NetAmount == 0)
+        {
+            return 0m;
+        }
+
+        if (order.BillFrom is { } bf && order.BillTo is { } bt && bt >= bf)
+        {
+            var billDays = (bt.Date - bf.Date).Days + 1;
+            if (billDays <= 0)
+            {
+                return 0m;
+            }
+
+            var overlapStart = bf > start ? bf.Date : start.Date;
+            var overlapEnd = bt.Date < endExclusive.Date.AddDays(-1)
+                ? bt.Date
+                : endExclusive.Date.AddDays(-1);
+            if (overlapEnd < overlapStart)
+            {
+                return 0m;
+            }
+
+            var overlapDays = (overlapEnd - overlapStart).Days + 1;
+            return order.NetAmount * overlapDays / billDays;
+        }
+
+        var pivot = order.CompletedOn ?? order.CheckedOutOn;
+        if (pivot is { } p && p >= start && p < endExclusive)
+        {
+            return order.NetAmount;
+        }
+
+        return 0m;
+    }
+
+    private static List<(string Customer, decimal Amount, int Orders)> RollupOrdersByCustomer(
+        IEnumerable<EzRentOrderDto> orders,
+        DateTimeOffset start,
+        DateTimeOffset endExclusive)
+    {
+        return orders
+            .GroupBy(o => o.Customer, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var amount = g.Sum(o => ProrateOrderAmount(o, start, endExclusive));
+                var count = g.Count(o => ProrateOrderAmount(o, start, endExclusive) > 0);
+                return (Customer: g.First().Customer, Amount: amount, Orders: count);
+            })
+            .Where(x => x.Amount > 0)
+            .OrderByDescending(x => x.Amount)
+            .ToList();
+    }
+
+    private static void AppendEzHistoryFactSheet(
+        StringBuilder sb,
+        IReadOnlyList<EzRentOrderDto> orders,
+        string? customer)
+    {
+        if (orders.Count == 0)
+        {
+            sb.AppendLine("### Historical order revenue");
+            sb.AppendLine("- (no EZRentOut orders loaded)");
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var periods = new List<EzHistoryPeriod>
+        {
+            new("MTD", StartOfMonth(now), StartOfMonth(now).AddMonths(1)),
+            new("YTD", StartOfYear(now), StartOfYear(now).AddYears(1)),
+            new(StartOfMonth(now).AddMonths(-1).ToString("MMM yyyy"),
+                StartOfMonth(now).AddMonths(-1), StartOfMonth(now)),
+            new(StartOfMonth(now).AddMonths(-2).ToString("MMM yyyy"),
+                StartOfMonth(now).AddMonths(-2), StartOfMonth(now).AddMonths(-1)),
+            new((now.Year - 1).ToString(), StartOfYear(now).AddYears(-1), StartOfYear(now)),
+        };
+
+        sb.AppendLine("### Historical order revenue (net_amount prorated by bill_from→bill_to)");
+        sb.AppendLine(
+            $"Orders in pull: {orders.Count}. Do NOT multiply current daily run-rate for these figures.");
+        foreach (var period in periods)
+        {
+            var total = SumOrderRevenue(orders, period.Start, period.EndExclusive, customer);
+            var label = customer is null ? "All customers" : customer;
+            sb.AppendLine($"- {period.Label} · {label}: ${total:0.##}");
+        }
+
+        var mtd = periods[0];
+        sb.AppendLine($"### {mtd.Label} by customer (order history)");
+        var scoped = string.IsNullOrWhiteSpace(customer)
+            ? orders
+            : orders.Where(o =>
+                string.Equals(o.Customer, customer, StringComparison.OrdinalIgnoreCase) ||
+                o.Customer.Contains(customer!, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var row in RollupOrdersByCustomer(scoped, mtd.Start, mtd.EndExclusive).Take(15))
+        {
+            sb.AppendLine($"- {row.Customer}: ${row.Amount:0.##} ({row.Orders} orders contributing)");
+        }
+
+        var ytd = periods[1];
+        sb.AppendLine($"### {ytd.Label} by customer (order history)");
+        foreach (var row in RollupOrdersByCustomer(scoped, ytd.Start, ytd.EndExclusive).Take(15))
+        {
+            sb.AppendLine($"- {row.Customer}: ${row.Amount:0.##} ({row.Orders} orders contributing)");
+        }
+    }
+
+    private static bool WantsDetails(string q) =>
+        q.Contains("detail") || q.Contains("breakdown") || q.Contains("break down") ||
+        q.Contains("line item") || q.Contains("line-item") || q.Contains("list") ||
+        q.Contains("which ") || q.Contains("show me") || q.Contains("show the") ||
+        q.Contains("by customer") || q.Contains("by asset") || q.Contains("by location") ||
+        q.Contains("itemize") || q.Contains("full ") || q.Contains("everything");
+
+    private static string BuildEzHistoryMoneyReply(
+        IReadOnlyList<EzRentOrderDto> orders,
+        string? customer,
+        EzHistoryPeriod period,
+        string question)
+    {
+        if (orders.Count == 0)
+        {
+            return "I don't have EZRentOut order history loaded, so I can't compute billed MTD/YTD yet.";
+        }
+
+        var total = SumOrderRevenue(orders, period.Start, period.EndExclusive, customer);
+        var label = customer ?? "All customers";
+        var summary =
+            $"{label} billed about ${total:0.##} for {period.Label} " +
+            $"({period.Start:MMM d}–{period.EndExclusive.AddDays(-1):MMM d, yyyy}), " +
+            "based on order net amounts prorated across each order's bill dates.";
+
+        if (!WantsDetails(question))
+        {
+            // One companion figure when useful, still short.
+            if (!string.Equals(period.Label, "MTD", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(period.Label, "YTD", StringComparison.OrdinalIgnoreCase))
+            {
+                var now = DateTimeOffset.UtcNow;
+                var mtd = SumOrderRevenue(orders, StartOfMonth(now), StartOfMonth(now).AddMonths(1), customer);
+                var ytd = SumOrderRevenue(orders, StartOfYear(now), StartOfYear(now).AddYears(1), customer);
+                return $"{summary} For context, MTD is ${mtd:0.##} and YTD is ${ytd:0.##}.";
+            }
+
+            return summary;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine(summary);
+        sb.AppendLine();
+        var rows = RollupOrdersByCustomer(
+            string.IsNullOrWhiteSpace(customer)
+                ? orders
+                : orders.Where(o =>
+                    string.Equals(o.Customer, customer, StringComparison.OrdinalIgnoreCase) ||
+                    o.Customer.Contains(customer!, StringComparison.OrdinalIgnoreCase)).ToList(),
+            period.Start,
+            period.EndExclusive);
+        sb.AppendLine($"By customer · {period.Label}:");
+        foreach (var row in rows.Take(customer is null ? 20 : 8))
+        {
+            sb.AppendLine($"- {row.Customer}: ${row.Amount:0.##} ({row.Orders} orders)");
+        }
+
+        if (rows.Count == 0)
+        {
+            sb.AppendLine("- (no billed order amount overlapped this period in the current pull)");
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static string BuildEzCurrentDailyReply(
+        IReadOnlyList<ExternalWorkItemDto> items,
+        IReadOnlyList<EzCustomerRollup> rollups,
+        EzCustomerRollup? customerHit,
+        string question)
+    {
+        if (customerHit is not null)
+        {
+            var summary =
+                $"{customerHit.Customer} is at about ${customerHit.DailyTotal:0.##}/day on rent right now " +
+                $"({customerHit.AssetCount} assets checked out).";
+            if (!WantsDetails(question))
+            {
+                return summary;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine(summary);
+            sb.AppendLine();
+            sb.AppendLine("Assets (highest daily $ first):");
+            foreach (var item in customerHit.Items.OrderByDescending(ReadDailyRate).Take(20))
+            {
+                sb.AppendLine($"- {FormatWorkLine(item)}");
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        var daily = items.Sum(ReadDailyRate);
+        var allSummary =
+            $"EZRentOut is at about ${daily:0.##}/day on rent right now across {items.Count} checked-out assets.";
+        if (!WantsDetails(question))
+        {
+            return allSummary;
+        }
+
+        var detail = new StringBuilder();
+        detail.AppendLine(allSummary);
+        detail.AppendLine();
+        detail.AppendLine("By customer:");
+        foreach (var row in rollups.OrderByDescending(r => r.DailyTotal).Take(15))
+        {
+            detail.AppendLine(
+                $"- {row.Customer}: ${row.DailyTotal:0.##}/day | {row.AssetCount} assets" +
+                (row.OverdueCount > 0 ? $" | {row.OverdueCount} overdue" : ""));
+        }
+
+        return detail.ToString().Trim();
+    }
+
+    private static string BuildEzLocationReply(
+        IReadOnlyList<ExternalWorkItemDto> items,
+        string? customer,
+        string question)
+    {
+        var daily = items.Sum(ReadDailyRate);
+        var summary =
+            $"{customer ?? "EZRentOut"} has {items.Count} assets checked out at about ${daily:0.##}/day.";
+        if (!WantsDetails(question) &&
+            !question.Contains("location") && !question.Contains("permi") &&
+            !question.Contains("northern") && !question.Contains("where"))
+        {
+            return summary;
+        }
+
+        // Location questions are inherently a breakdown.
+        var sb = new StringBuilder();
+        sb.AppendLine(summary);
+        sb.AppendLine();
+        sb.AppendLine("By location:");
+        foreach (var row in BuildEzLocationRollups(items).OrderByDescending(r => r.DailyTotal))
+        {
+            sb.AppendLine($"- {row.Location}: ${row.DailyTotal:0.##}/day | {row.AssetCount} assets");
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static List<string> BuildEzOrderCustomerNames(IEnumerable<EzRentOrderDto> orders) =>
+        orders.Select(o => o.Customer)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static List<EzCustomerRollup> BuildEzCustomerRollups(IEnumerable<ExternalWorkItemDto> items) =>
+        items
+            .GroupBy(
+                i => string.IsNullOrWhiteSpace(i.Assignee)
+                    ? (i.Metadata?.GetValueOrDefault("customer") is { Length: > 0 } c ? c : "Unassigned customer")
+                    : i.Assignee!.Trim(),
+                StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var list = g.ToList();
+                return new EzCustomerRollup(
+                    g.Key,
+                    list.Sum(ReadDailyRate),
+                    list.Sum(i =>
+                    {
+                        var weekly = ReadMetaDecimal(i, "weeklyRateValue", "weeklyRate");
+                        return weekly > 0 ? weekly : ReadDailyRate(i) * 7m;
+                    }),
+                    list.Sum(ReadMonthlyRate),
+                    list.Sum(i => ReadMonthlyRate(i) * 12m),
+                    list.Sum(ReadRentCollected),
+                    list.Count,
+                    list.Count(i => string.Equals(i.Status, "Overdue return", StringComparison.OrdinalIgnoreCase)),
+                    list);
+            })
+            .OrderByDescending(r => r.DailyTotal)
+            .ThenBy(r => r.Customer, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static List<EzLocationRollup> BuildEzLocationRollups(IEnumerable<ExternalWorkItemDto> items) =>
+        items
+            .GroupBy(
+                i =>
+                {
+                    var loc = i.Metadata?.GetValueOrDefault("location");
+                    return string.IsNullOrWhiteSpace(loc) ? "Unknown location" : loc.Trim();
+                },
+                StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var list = g.ToList();
+                return new EzLocationRollup(
+                    g.Key,
+                    list.Sum(ReadDailyRate),
+                    list.Sum(ReadMonthlyRate),
+                    list.Sum(i => ReadMonthlyRate(i) * 12m),
+                    list.Count);
+            })
+            .OrderByDescending(r => r.DailyTotal)
+            .ThenBy(r => r.Location, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static void AppendMondayBilledFactSheet(
+        StringBuilder sb,
+        IReadOnlyList<ExternalWorkItemDto> quotes,
+        string? partyFilter = null)
+    {
+        var billed = quotes
+            .Where(q => string.Equals(q.Status, "Billed", StringComparison.OrdinalIgnoreCase) ||
+                        q.Metadata?.GetValueOrDefault("bucket") == "billed")
+            .Where(q => partyFilter is null || QuoteMatchesParty(q, partyFilter))
+            .Select(q =>
+            {
+                DateTimeOffset? when = null;
+                if (DateTimeOffset.TryParse(q.Metadata?.GetValueOrDefault("billedAt"), out var billedAt))
+                {
+                    when = billedAt;
+                }
+
+                return (Quote: q, When: when);
+            })
+            .Where(x => x.When is not null)
+            .OrderByDescending(x => x.When)
+            .ToList();
+
+        sb.AppendLine();
+        sb.AppendLine(
+            partyFilter is null
+                ? "## Monday quotes converted to Billed"
+                : $"## Monday quotes converted to Billed (filtered: {partyFilter})");
+        sb.AppendLine(
+            "Quote Status \"Billed\" = converted to a billed order (status-change date). " +
+            "Not EZRentOut rental order revenue. When a customer/name is in the question, ONLY list matching quotes.");
+        if (billed.Count == 0)
+        {
+            sb.AppendLine(partyFilter is null
+                ? "- none in current pull (or no billedAt dates)"
+                : $"- none matching {partyFilter} in current pull");
+            return;
+        }
+
+        foreach (var monthGroup in billed
+                     .GroupBy(x => x.When!.Value.ToString("yyyy-MM"))
+                     .OrderByDescending(g => g.Key)
+                     .Take(8))
+        {
+            var label = DateTimeOffset.TryParse(monthGroup.Key + "-01", out var monthStart)
+                ? monthStart.ToString("MMM yyyy")
+                : monthGroup.Key;
+            var monthTotal = monthGroup.Sum(x =>
+                decimal.TryParse(x.Quote.Metadata?.GetValueOrDefault("amount"), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out var amt)
+                    ? amt
+                    : 0m);
+            var totalBit = monthTotal > 0 ? $" · ~${monthTotal:0.##}" : "";
+            sb.AppendLine($"{label} ({monthGroup.Count()}{totalBit}):");
+            foreach (var row in monthGroup.OrderBy(x => x.When).Take(40))
+            {
+                sb.AppendLine($"  - {FormatBilledQuoteLine(row.Quote)}");
+            }
+        }
+    }
+
+    private static bool QuoteMatchesParty(ExternalWorkItemDto quote, string party)
+    {
+        if (string.IsNullOrWhiteSpace(party))
+        {
+            return true;
+        }
+
+        var hay = QuoteHaystack(quote);
+        if (hay.Contains(party, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var compactParty = new string(party.Where(char.IsLetterOrDigit).ToArray());
+        var compactHay = new string(hay.Where(char.IsLetterOrDigit).ToArray());
+        return compactParty.Length >= 4 &&
+               compactHay.Contains(compactParty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? FindQuotePartyFilter(string question, IReadOnlyList<ExternalWorkItemDto> quotes)
+    {
+        if (string.IsNullOrWhiteSpace(question) || quotes.Count == 0)
+        {
+            return null;
+        }
+
+        var q = question.Trim().ToLowerInvariant();
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var quote in quotes)
+        {
+            var customer = quote.Metadata?.GetValueOrDefault("customer")?.Trim();
+            if (!string.IsNullOrWhiteSpace(customer) && customer.Length >= 3)
+            {
+                candidates.Add(customer);
+            }
+
+            var title = (quote.Title ?? "").Trim();
+            foreach (var sep in new[] { " - ", " – ", "-", "—" })
+            {
+                var idx = title.IndexOf(sep, StringComparison.Ordinal);
+                if (idx < 3)
+                {
+                    continue;
+                }
+
+                var prefix = title[..idx].Trim();
+                if (prefix.Length >= 3 && prefix.Length <= 48 && !IsWeakQuotePartyToken(prefix))
+                {
+                    candidates.Add(prefix);
+                }
+
+                break;
+            }
+        }
+
+        string? best = null;
+        foreach (var candidate in candidates.OrderByDescending(c => c.Length))
+        {
+            if (candidate.Length < 3 || IsWeakQuotePartyToken(candidate))
+            {
+                continue;
+            }
+
+            if (q.Contains(candidate.ToLowerInvariant()))
+            {
+                best = candidate;
+                break;
+            }
+
+            var compactCandidate = new string(candidate.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+            var compactQuestion = new string(q.Where(char.IsLetterOrDigit).ToArray());
+            if (compactCandidate.Length >= 4 && compactQuestion.Contains(compactCandidate))
+            {
+                best = candidate;
+                break;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool IsWeakQuotePartyToken(string value)
+    {
+        var v = value.Trim().ToLowerInvariant();
+        return v is "quote" or "quotes" or "sale" or "sales" or "rental" or "rentals" or "service" or
+               "services" or "parts" or "part" or "internal" or "shop" or "field" or "meter" or
+               "purchase" or "repair" or "please select" or "new mexico" or "east tx" or "south tx";
+    }
+
+    private static EzCustomerRollup? FindEzCustomerMatch(string question, IReadOnlyList<EzCustomerRollup> rollups)
+    {
+        if (string.IsNullOrWhiteSpace(question) || rollups.Count == 0)
+        {
+            return null;
+        }
+
+        var q = question.Trim().ToLowerInvariant();
+        var questionTokens = TokenizeCustomerQuery(q);
+        if (questionTokens.Count == 0 && q.Length < 3)
+        {
+            return null;
+        }
+
+            EzCustomerRollup? best = null;
+        var bestScore = 0;
+
+        foreach (var row in rollups)
+        {
+            var name = row.Customer.Trim();
+            if (name.Length < 2 ||
+                name.Equals("Unassigned customer", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var score = ScoreEzCustomerMatch(q, questionTokens, name);
+            if (score > bestScore ||
+                (score == bestScore && best is not null && row.AssetCount > best.AssetCount))
+            {
+                bestScore = score;
+                best = row;
+            }
+        }
+
+        // Require a real signal — avoid weak accidental overlaps.
+        return bestScore >= 40 ? best : null;
+    }
+
+    private static int ScoreEzCustomerMatch(string questionLower, IReadOnlyList<string> questionTokens, string customerName)
+    {
+        var nameLower = customerName.ToLowerInvariant();
+        var score = 0;
+
+        if (questionLower.Contains(nameLower))
+        {
+            score = Math.Max(score, 1000 + nameLower.Length);
+        }
+
+        var compactCustomer = new string(nameLower.Where(char.IsLetterOrDigit).ToArray());
+        var compactQuestion = new string(questionLower.Where(char.IsLetterOrDigit).ToArray());
+        if (compactCustomer.Length >= 4 && compactQuestion.Contains(compactCustomer))
+        {
+            score = Math.Max(score, 900 + compactCustomer.Length);
+        }
+
+        var customerTokens = TokenizeCustomerQuery(nameLower)
+            .Where(t => !EzCustomerStopTokens.Contains(t))
+            .ToList();
+        if (customerTokens.Count == 0)
+        {
+            return score;
+        }
+
+        // All significant customer tokens present in the question (strong).
+        if (customerTokens.Count > 0 && customerTokens.All(t =>
+                questionLower.Contains(t) || questionTokens.Contains(t)))
+        {
+            score = Math.Max(score, 800 + customerTokens.Sum(t => t.Length));
+        }
+
+        // Distinctive partial match: any strong customer token appears in the question
+        // (e.g. "hondo" → "Hondo Resources, LLC", "elevate" → "ELEVATE ENERGY SERVICES").
+        foreach (var token in customerTokens.OrderByDescending(t => t.Length))
+        {
+            if (token.Length < 4)
+            {
+                continue;
+            }
+
+            if (questionTokens.Contains(token) ||
+                questionLower.Contains(token) ||
+                // possessive / glued forms: hondo's, hondos
+                questionTokens.Any(qt => qt == token || qt == token + "s" || qt.StartsWith(token)))
+            {
+                score = Math.Max(score, 100 + token.Length * 10);
+            }
+        }
+
+        // Question tokens contained in the customer name (user typed a short nickname).
+        foreach (var qt in questionTokens.Where(t => t.Length >= 4 && !EzCustomerStopTokens.Contains(t)))
+        {
+            if (nameLower.Contains(qt) || compactCustomer.Contains(qt))
+            {
+                score = Math.Max(score, 120 + qt.Length * 10);
+            }
+        }
+
+        return score;
+    }
+
+    private static List<string> TokenizeCustomerQuery(string text)
+    {
+        return System.Text.RegularExpressions.Regex.Matches(text.ToLowerInvariant(), @"[a-z0-9]+")
+            .Select(m => m.Value)
+            .Where(t => t.Length >= 3 && !EzCustomerStopTokens.Contains(t))
+            .Distinct()
+            .ToList();
+    }
+
+    private static readonly HashSet<string> EzCustomerStopTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "and", "for", "with", "from", "that", "this", "what", "whats", "which", "when",
+        "where", "who", "how", "many", "much", "about", "give", "need", "know", "tell", "show",
+        "list", "please", "current", "right", "now", "today", "daily", "weekly", "monthly",
+        "yearly", "annual", "rate", "rates", "rent", "rental", "rentals", "onrent", "billing",
+        "billed", "revenue", "total", "amount", "dollar", "dollars", "asset", "assets",
+        "equipment", "order", "orders", "customer", "customers", "ezrent", "ezrentout",
+        "llc", "inc", "ltd", "corp", "company", "companies", "services", "service", "group",
+        "holdings", "partners", "solutions", "energy", "oil", "gas", "water", "field",
+        "oilfield", "oilfiled", "midstream", "resources", "operating", "ops", "usa", "us",
+        "co", "of", "to", "is", "are", "me", "my", "our", "their", "his", "her",
+    };
+
+    /// <summary>
+    /// True when the question looks customer-specific so we must not answer with company-wide totals.
+    /// </summary>
+    private static bool LooksLikeNamedCustomerQuestion(string q, EzCustomerRollup? matched)
+    {
+        if (matched is not null)
+        {
+            return true;
+        }
+
+        var tokens = TokenizeCustomerQuery(q);
+        // Strip rental/ops vocabulary; anything left is likely a name fragment.
+        return tokens.Count > 0;
+    }
+
+    private static string? GuessCustomerLabelFromQuestion(string q)
+    {
+        var tokens = TokenizeCustomerQuery(q);
+        return tokens.Count == 0 ? null : string.Join(' ', tokens.Take(4));
+    }
+
+    private static string BuildEzCustomerMissReply(
+        string question,
+        IReadOnlyList<EzCustomerRollup> rollups)
+    {
+        var label = GuessCustomerLabelFromQuestion(question) ?? "that name";
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            $"I couldn't match a checked-out EZRentOut customer for \"{label}\". " +
+            "Try the name as it appears on rent (example: Hondo Resources).");
+        if (rollups.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Top on-rent customers right now:");
+            foreach (var row in rollups.OrderByDescending(r => r.DailyTotal).Take(8))
+            {
+                sb.AppendLine($"- {row.Customer}: ${row.DailyTotal:0.##}/day ({row.AssetCount} assets)");
+            }
+        }
+
+        return sb.ToString().Trim();
     }
 }

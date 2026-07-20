@@ -640,6 +640,16 @@ public sealed class MaintainXConnector : IMaintainXConnector
 
 public sealed class EZRentOutConnector : IEZRentOutConnector
 {
+    private static readonly TimeSpan OpenWorkCacheTtl = TimeSpan.FromMinutes(3);
+    private static readonly object OpenWorkCacheGate = new();
+    private static IReadOnlyList<ExternalWorkItemDto>? OpenWorkCache;
+    private static DateTimeOffset OpenWorkCacheExpiresAt;
+
+    private static readonly TimeSpan OrdersCacheTtl = TimeSpan.FromMinutes(10);
+    private static readonly object OrdersCacheGate = new();
+    private static IReadOnlyList<EzRentOrderDto>? OrdersCache;
+    private static DateTimeOffset OrdersCacheExpiresAt;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly EZRentOutOptions _options;
     private readonly ILogger<EZRentOutConnector> _logger;
@@ -669,7 +679,10 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
 
         try
         {
-            using var response = await SendAsync(HttpMethod.Get, "assets.api?page=1", cancellationToken);
+            using var response = await SendAsync(
+                HttpMethod.Get,
+                "assets/filter.api?status=checked_out&page=1",
+                cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -699,101 +712,388 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
             return [];
         }
 
-        var items = new List<ExternalWorkItemDto>();
-        var maxPages = 8;
+        lock (OpenWorkCacheGate)
+        {
+            if (OpenWorkCache is not null && OpenWorkCacheExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return OpenWorkCache;
+            }
+        }
 
         try
         {
-            for (var page = 1; page <= maxPages; page++)
+            var items = await FetchAllCheckedOutAsync(cancellationToken);
+            var ordered = items
+                .OrderBy(i => i.DueAt ?? DateTimeOffset.MaxValue)
+                .ThenBy(i => i.Assignee ?? "", StringComparer.OrdinalIgnoreCase)
+                .ThenBy(i => i.Title, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            lock (OpenWorkCacheGate)
             {
-                using var response = await SendAsync(
-                    HttpMethod.Get,
-                    $"assets.api?page={page}",
-                    cancellationToken);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                    _logger.LogWarning(
-                        "EZRentOut assets page {Page} failed: {Status} {Body}",
-                        page,
-                        (int)response.StatusCode,
-                        Truncate(body));
-                    break;
-                }
-
-                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-                if (!doc.RootElement.TryGetProperty("assets", out var assets) ||
-                    assets.ValueKind != JsonValueKind.Array)
-                {
-                    break;
-                }
-
-                var pageCount = 0;
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    pageCount++;
-                    var state = ReadAssetString(asset, "state");
-                    if (!string.Equals(state, "checked_out", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var id = ReadAssetString(asset, "identifier")
-                        ?? ReadAssetString(asset, "sequence_num")
-                        ?? Guid.NewGuid().ToString("N");
-                    var name = ReadAssetString(asset, "name") ?? "(unnamed asset)";
-                    var description = ReadAssetString(asset, "description");
-                    var title = string.IsNullOrWhiteSpace(description)
-                        ? name
-                        : $"{name} — {description}";
-                    var due = ReadAssetDate(asset, "checkin_due_on");
-                    var checkout = ReadAssetDate(asset, "checkout_on");
-                    var status = due.HasValue && due.Value < DateTimeOffset.UtcNow
-                        ? "Overdue return"
-                        : "Checked out";
-
-                    items.Add(new ExternalWorkItemDto(
-                        "EZRentOut",
-                        "EZRentOut",
-                        id,
-                        title,
-                        status,
-                        null,
-                        due,
-                        null,
-                        new Dictionary<string, string>
-                        {
-                            ["rawState"] = state ?? "",
-                            ["checkoutOn"] = checkout?.ToString("u") ?? "",
-                            ["assetName"] = name,
-                        }));
-                }
-
-                if (pageCount == 0)
-                {
-                    break;
-                }
-
-                var totalPages = doc.RootElement.TryGetProperty("total_pages", out var tp) &&
-                    tp.TryGetInt32(out var pages)
-                    ? pages
-                    : page;
-                if (page >= totalPages)
-                {
-                    break;
-                }
+                OpenWorkCache = ordered;
+                OpenWorkCacheExpiresAt = DateTimeOffset.UtcNow.Add(OpenWorkCacheTtl);
             }
+
+            return ordered;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "EZRentOut open-work list failed");
+            lock (OpenWorkCacheGate)
+            {
+                if (OpenWorkCache is not null)
+                {
+                    return OpenWorkCache;
+                }
+            }
+
+            return [];
+        }
+    }
+
+    public async Task<IReadOnlyList<EzRentOrderDto>> ListOrdersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_options.Subdomain) || string.IsNullOrWhiteSpace(_options.ApiToken))
+        {
+            return [];
         }
 
-        return items
-            .OrderBy(i => i.DueAt ?? DateTimeOffset.MaxValue)
-            .ThenBy(i => i.Title, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        lock (OrdersCacheGate)
+        {
+            if (OrdersCache is not null && OrdersCacheExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return OrdersCache;
+            }
+        }
+
+        try
+        {
+            var lookback = DateTimeOffset.UtcNow.AddYears(-3);
+            var filters = new[]
+            {
+                "filters[completed]=completed",
+                "filters[state]=checked_out",
+                "filters[state]=checkin_payment_pending",
+            };
+
+            var batches = await Task.WhenAll(
+                filters.Select(f => FetchOrdersForFilterAsync(f, lookback, cancellationToken)));
+
+            var byId = new Dictionary<string, EzRentOrderDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var order in batches.SelectMany(x => x))
+            {
+                byId[order.OrderId] = order;
+            }
+
+            var ordered = byId.Values
+                .OrderByDescending(o => o.BillFrom ?? o.CompletedOn ?? o.CheckedOutOn ?? DateTimeOffset.MinValue)
+                .ThenBy(o => o.Customer, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            lock (OrdersCacheGate)
+            {
+                OrdersCache = ordered;
+                OrdersCacheExpiresAt = DateTimeOffset.UtcNow.Add(OrdersCacheTtl);
+            }
+
+            _logger.LogInformation(
+                "EZRentOut loaded {OrderCount} orders for revenue history (lookback {Lookback:u})",
+                ordered.Count,
+                lookback);
+            return ordered;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EZRentOut order list failed");
+            lock (OrdersCacheGate)
+            {
+                if (OrdersCache is not null)
+                {
+                    return OrdersCache;
+                }
+            }
+
+            return [];
+        }
+    }
+
+    private async Task<List<EzRentOrderDto>> FetchOrdersForFilterAsync(
+        string filterQuery,
+        DateTimeOffset lookback,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<EzRentOrderDto>();
+        var maxPages = 120;
+        for (var page = 1; page <= maxPages; )
+        {
+            var batchPages = Enumerable.Range(page, Math.Min(6, maxPages - page + 1)).ToList();
+            var pageResults = await Task.WhenAll(
+                batchPages.Select(p => FetchOrdersPageAsync(filterQuery, p, cancellationToken)));
+
+            var stop = false;
+            foreach (var (pageNum, baskets) in batchPages.Zip(pageResults))
+            {
+                if (baskets.Count == 0)
+                {
+                    stop = true;
+                    break;
+                }
+
+                items.AddRange(baskets);
+
+                // Completed lists are newest-first; stop once a full page is older than lookback.
+                var newestOnPage = baskets.Max(o =>
+                    o.BillTo ?? o.BillFrom ?? o.CompletedOn ?? o.CheckedOutOn ?? DateTimeOffset.MinValue);
+                if (baskets.Count < 25)
+                {
+                    stop = true;
+                    break;
+                }
+
+                if (newestOnPage < lookback &&
+                    filterQuery.Contains("completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    stop = true;
+                    break;
+                }
+
+                _ = pageNum;
+            }
+
+            if (stop)
+            {
+                break;
+            }
+
+            page += batchPages.Count;
+        }
+
+        return items;
+    }
+
+    private async Task<List<EzRentOrderDto>> FetchOrdersPageAsync(
+        string filterQuery,
+        int page,
+        CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"baskets.api?page={page}&{filterQuery}",
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning(
+                "EZRentOut baskets page {Page} ({Filter}) failed: {Status} {Body}",
+                page,
+                filterQuery,
+                (int)response.StatusCode,
+                Truncate(body));
+            return [];
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        if (!doc.RootElement.TryGetProperty("baskets", out var baskets) ||
+            baskets.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var items = new List<EzRentOrderDto>();
+        foreach (var basket in baskets.EnumerateArray())
+        {
+            var mapped = MapOrder(basket);
+            if (mapped is not null)
+            {
+                items.Add(mapped);
+            }
+        }
+
+        return items;
+    }
+
+    private static EzRentOrderDto? MapOrder(JsonElement basket)
+    {
+        var state = ReadAssetString(basket, "basket_state") ?? "";
+        if (state.Equals("drafted", StringComparison.OrdinalIgnoreCase) ||
+            state.Equals("void", StringComparison.OrdinalIgnoreCase) ||
+            state.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
+            state.Equals("canceled", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var id = ReadAssetString(basket, "identification_number")
+            ?? ReadAssetString(basket, "sequence_num")
+            ?? Guid.NewGuid().ToString("N");
+        var customer = "Unknown";
+        if (basket.TryGetProperty("associated_customer", out var cust) &&
+            cust.ValueKind == JsonValueKind.Object)
+        {
+            customer = ReadAssetString(cust, "name")?.Trim() is { Length: > 0 } name
+                ? name
+                : "Unknown";
+        }
+
+        var net = ReadAssetDecimal(basket, "net_amount") ?? 0m;
+        var gross = ReadAssetDecimal(basket, "gross_amount") ?? net;
+
+        return new EzRentOrderDto(
+            id,
+            customer,
+            string.IsNullOrWhiteSpace(state) ? "unknown" : state,
+            net,
+            gross,
+            ReadAssetDate(basket, "bill_from"),
+            ReadAssetDate(basket, "bill_to"),
+            ReadAssetDate(basket, "checked_out_on"),
+            ReadAssetDate(basket, "completed_on"));
+    }
+
+    private async Task<List<ExternalWorkItemDto>> FetchAllCheckedOutAsync(CancellationToken cancellationToken)
+    {
+        var first = await FetchCheckedOutPageAsync(1, cancellationToken);
+        var items = new List<ExternalWorkItemDto>(first.Items);
+        if (first.TotalPages <= 1)
+        {
+            return items;
+        }
+
+        // Cap pages defensively; filter.api returns ~25 assets/page.
+        var lastPage = Math.Min(first.TotalPages, 80);
+        using var gate = new SemaphoreSlim(5);
+        var tasks = new List<Task<(int Page, IReadOnlyList<ExternalWorkItemDto> Items)>>();
+        for (var page = 2; page <= lastPage; page++)
+        {
+            var pageCopy = page;
+            tasks.Add(Task.Run(async () =>
+            {
+                await gate.WaitAsync(cancellationToken);
+                try
+                {
+                    var result = await FetchCheckedOutPageAsync(pageCopy, cancellationToken);
+                    return (pageCopy, result.Items);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }, cancellationToken));
+        }
+
+        var pages = await Task.WhenAll(tasks);
+        foreach (var page in pages.OrderBy(p => p.Page))
+        {
+            items.AddRange(page.Items);
+        }
+
+        return items;
+    }
+
+    private async Task<(int TotalPages, IReadOnlyList<ExternalWorkItemDto> Items)> FetchCheckedOutPageAsync(
+        int page,
+        CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"assets/filter.api?status=checked_out&page={page}",
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning(
+                "EZRentOut checked-out page {Page} failed: {Status} {Body}",
+                page,
+                (int)response.StatusCode,
+                Truncate(body));
+            return (page, []);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        if (!doc.RootElement.TryGetProperty("assets", out var assets) ||
+            assets.ValueKind != JsonValueKind.Array)
+        {
+            return (page, []);
+        }
+
+        var totalPages = doc.RootElement.TryGetProperty("total_pages", out var tp) &&
+            tp.TryGetInt32(out var pages)
+            ? Math.Max(pages, 1)
+            : page;
+
+        var items = new List<ExternalWorkItemDto>();
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var mapped = MapCheckedOutAsset(asset);
+            if (mapped is not null)
+            {
+                items.Add(mapped);
+            }
+        }
+
+        return (totalPages, items);
+    }
+
+    private static ExternalWorkItemDto? MapCheckedOutAsset(JsonElement asset)
+    {
+        var state = ReadAssetString(asset, "state");
+        // filter.api already scopes to checked_out; keep a soft guard.
+        if (!string.IsNullOrWhiteSpace(state) &&
+            !string.Equals(state, "checked_out", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var id = ReadAssetString(asset, "identifier")
+            ?? ReadAssetString(asset, "sequence_num")
+            ?? Guid.NewGuid().ToString("N");
+        var name = ReadAssetString(asset, "name") ?? "(unnamed asset)";
+        var description = ReadAssetString(asset, "description");
+        var title = string.IsNullOrWhiteSpace(description)
+            ? name
+            : $"{name} — {description}";
+        var due = ReadAssetDate(asset, "checkin_due_on");
+        var checkout = ReadAssetDate(asset, "checkout_on");
+        var status = due.HasValue && due.Value < DateTimeOffset.UtcNow
+            ? "Overdue return"
+            : "Checked out";
+        var customer = ReadAssetString(asset, "assigned_to_user_name")
+            ?? ReadAssetString(asset, "sub_checked_out_to_full_name");
+        var location = ReadAssetString(asset, "location_name");
+        var daily = ReadRentalPrice(asset, "daily");
+        var weekly = ReadRentalPrice(asset, "weekly");
+        var monthly = ReadRentalPrice(asset, "monthly");
+        var hourly = ReadRentalPrice(asset, "hourly");
+        var rentCollected = ReadAssetDecimal(asset, "rent_collected");
+
+        return new ExternalWorkItemDto(
+            "EZRentOut",
+            "EZRentOut",
+            id,
+            title,
+            status,
+            string.IsNullOrWhiteSpace(customer) ? null : customer.Trim(),
+            due,
+            null,
+            new Dictionary<string, string>
+            {
+                ["rawState"] = state ?? "checked_out",
+                ["checkoutOn"] = checkout?.ToString("u") ?? "",
+                ["assetName"] = name,
+                ["customer"] = string.IsNullOrWhiteSpace(customer) ? "" : customer.Trim(),
+                ["location"] = location ?? "",
+                ["dailyRate"] = FormatMoney(daily),
+                ["weeklyRate"] = FormatMoney(weekly),
+                ["monthlyRate"] = FormatMoney(monthly),
+                ["hourlyRate"] = FormatMoney(hourly),
+                ["dailyRateValue"] = daily?.ToString("0.##", CultureInfo.InvariantCulture) ?? "",
+                ["rentCollected"] = FormatMoney(rentCollected),
+                ["rentCollectedValue"] = rentCollected?.ToString("0.##", CultureInfo.InvariantCulture) ?? "",
+            });
     }
 
     private async Task<HttpResponseMessage> SendAsync(
@@ -825,6 +1125,42 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
         };
     }
 
+    private static decimal? ReadRentalPrice(JsonElement asset, string period)
+    {
+        if (!asset.TryGetProperty("rental_prices", out var prices) ||
+            prices.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return ReadDecimal(prices, period);
+    }
+
+    private static decimal? ReadAssetDecimal(JsonElement el, string name) =>
+        el.TryGetProperty(name, out _) ? ReadDecimal(el, name) : null;
+
+    private static decimal? ReadDecimal(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var prop))
+        {
+            return null;
+        }
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.Number when prop.TryGetDecimal(out var n) => n,
+            JsonValueKind.String when decimal.TryParse(
+                prop.GetString(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var parsed) => parsed,
+            _ => null,
+        };
+    }
+
+    private static string FormatMoney(decimal? value) =>
+        value is null ? "" : value.Value.ToString("0.##", CultureInfo.InvariantCulture);
+
     private static DateTimeOffset? ReadAssetDate(JsonElement el, string name)
     {
         var raw = ReadAssetString(el, name);
@@ -848,6 +1184,16 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
 
 public sealed class MondayConnector : IMondayConnector
 {
+    /// <summary>Quote Status column indexes on Quotes board (color_mkwzq278).</summary>
+    private static readonly int[] OpenQuoteStatusIndexes = [0, 4, 5, 6, 8]; // Sent, Ready to be Billed, Draft, Ready to be Closed, PENDING FINAL APPROVAL
+
+    private static readonly int[] BilledQuoteStatusIndexes = [3]; // Billed
+
+    private const string QuoteStatusColumnId = "color_mkwzq278";
+    private const int ItemsPageSize = 100;
+    private const int MaxOpenQuoteItems = 450;
+    private const int MaxBilledQuoteItems = 250;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly MondayOptions _options;
     private readonly ILogger<MondayConnector> _logger;
@@ -904,227 +1250,551 @@ public sealed class MondayConnector : IMondayConnector
             return [];
         }
 
-        var boardIds = _options.IncludedBoardIds
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Select(id => id.Trim())
-            .ToList();
-
-        if (boardIds.Count == 0)
-        {
-            // Fall back to workspace scan when no board ids configured.
-            if (!long.TryParse(_options.WorkspaceId, out var workspaceId))
-            {
-                throw new InvalidOperationException("Connectors:Monday:WorkspaceId must be a numeric workspace id.");
-            }
-
-            var discover = $$"""
-                query {
-                  boards(workspace_ids: [{{workspaceId}}], limit: 50, state: active) {
-                    id
-                    name
-                  }
-                }
-                """;
-            using var discovered = await PostGraphQlAsync(discover, cancellationToken);
-            if (discovered.RootElement.TryGetProperty("data", out var ddata) &&
-                ddata.TryGetProperty("boards", out var dboards))
-            {
-                foreach (var board in dboards.EnumerateArray())
-                {
-                    var name = board.GetProperty("name").GetString() ?? "";
-                    if (_options.IncludedBoardNames.Any(n =>
-                            string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        boardIds.Add(board.GetProperty("id").ToString());
-                    }
-                }
-            }
-        }
-
+        var boardIds = await ResolveBoardIdsAsync(cancellationToken);
         if (boardIds.Count == 0)
         {
             return [];
         }
 
-        var idsLiteral = string.Join(", ", boardIds);
-        var query = $$"""
+        var now = DateTimeOffset.UtcNow;
+        var agingDays = Math.Max(1, _options.QuoteAgingDays);
+        var byId = new Dictionary<string, ExternalWorkItemDto>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var boardId in boardIds)
+        {
+            var billedAtByItem = await LoadBilledAtByItemIdAsync(boardId, cancellationToken);
+
+            foreach (var item in await FetchQuoteItemsAsync(
+                         boardId,
+                         OpenQuoteStatusIndexes,
+                         MaxOpenQuoteItems,
+                         cancellationToken))
+            {
+                var dto = MapQuoteItem(item, boardNameFallback: "Quotes", now, agingDays, billedAtByItem);
+                if (dto is not null)
+                {
+                    byId[dto.ExternalId] = dto;
+                }
+            }
+
+            foreach (var item in await FetchQuoteItemsAsync(
+                         boardId,
+                         BilledQuoteStatusIndexes,
+                         MaxBilledQuoteItems,
+                         cancellationToken))
+            {
+                var dto = MapQuoteItem(item, boardNameFallback: "Quotes", now, agingDays, billedAtByItem);
+                if (dto is not null)
+                {
+                    byId[dto.ExternalId] = dto;
+                }
+            }
+        }
+
+        return byId.Values
+            .OrderByDescending(q => q.Metadata?.GetValueOrDefault("bucket") == "billed")
+            .ThenByDescending(q =>
+                DateTimeOffset.TryParse(q.Metadata?.GetValueOrDefault("billedAt"), out var billedAt)
+                    ? billedAt
+                    : DateTimeOffset.MinValue)
+            .ThenByDescending(q => int.TryParse(q.Metadata?.GetValueOrDefault("ageDays"), out var d) ? d : 0)
+            .ToList();
+    }
+
+    private async Task<List<string>> ResolveBoardIdsAsync(CancellationToken cancellationToken)
+    {
+        var boardIds = _options.IncludedBoardIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .ToList();
+
+        if (boardIds.Count > 0)
+        {
+            return boardIds;
+        }
+
+        if (!long.TryParse(_options.WorkspaceId, out var workspaceId))
+        {
+            throw new InvalidOperationException("Connectors:Monday:WorkspaceId must be a numeric workspace id.");
+        }
+
+        var discover = $$"""
             query {
-              boards(ids: [{{idsLiteral}}]) {
+              boards(workspace_ids: [{{workspaceId}}], limit: 50, state: active) {
                 id
                 name
-                items_page(limit: 75) {
-                  items {
-                    id
-                    name
-                    created_at
-                    updated_at
-                    column_values(ids: [
-                      "color_mkwzq278",
-                      "color_mkx11vkd",
-                      "color_mkx0d9kz",
-                      "multiple_person_mkwzczf7",
-                      "link_mkwz6c7d",
-                      "date_mkx0jjg9",
-                      "text_mkwzxk51",
-                      "color_mkx1xcf3",
-                      "boolean_mkx14rhb",
-                      "pulse_id_mkwzzpv1",
-                      "long_text_mkwzm5c7",
-                      "long_text_mkwzjbsb",
-                      "text_mkx0w7k0",
-                      "text_mkx5czc4",
-                      "text_mkwz6emw",
-                      "lookup_mkwz95eh",
-                      "lookup_mkx4h3jj",
-                      "board_relation_mkwz6m8s",
-                      "board_relation_mkwztd18"
-                    ]) {
-                      id
-                      text
-                      value
-                    }
-                    subitems {
-                      id
-                      name
-                      column_values(ids: [
-                        "dropdown_mkwzk7cp",
-                        "long_text_mkxv2f3d",
-                        "numeric_mkwzdhvm",
-                        "numeric_mkwzp3g",
-                        "numeric_mkwz4a5m",
-                        "numeric_mkx47b9n"
-                      ]) {
-                        id
-                        text
-                        value
-                      }
-                    }
-                  }
-                }
               }
             }
             """;
-
-        using var json = await PostGraphQlAsync(query, cancellationToken);
-        var items = new List<ExternalWorkItemDto>();
-        if (!json.RootElement.TryGetProperty("data", out var data) ||
-            !data.TryGetProperty("boards", out var boards))
+        using var discovered = await PostGraphQlAsync(discover, cancellationToken);
+        if (discovered.RootElement.TryGetProperty("data", out var ddata) &&
+            ddata.TryGetProperty("boards", out var dboards))
         {
-            return items;
+            foreach (var board in dboards.EnumerateArray())
+            {
+                var name = board.GetProperty("name").GetString() ?? "";
+                if (_options.IncludedBoardNames.Any(n =>
+                        string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    boardIds.Add(board.GetProperty("id").ToString());
+                }
+            }
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var agingDays = Math.Max(1, _options.QuoteAgingDays);
+        return boardIds;
+    }
 
-        foreach (var board in boards.EnumerateArray())
+    private async Task<List<JsonElement>> FetchQuoteItemsAsync(
+        string boardId,
+        IReadOnlyList<int> statusIndexes,
+        int maxItems,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<JsonElement>();
+        string? cursor = null;
+        var statusLiteral = string.Join(", ", statusIndexes);
+
+        while (items.Count < maxItems)
         {
-            var boardName = board.GetProperty("name").GetString() ?? "Board";
-            if (boardName.StartsWith("Subitems of ", StringComparison.OrdinalIgnoreCase) ||
-                IsExcludedBoard(boardName))
+            string query;
+            object? variables;
+            if (cursor is null)
             {
-                continue;
+                query = $$"""
+                    query {
+                      boards(ids: [{{boardId}}]) {
+                        id
+                        name
+                        items_page(
+                          limit: {{ItemsPageSize}},
+                          query_params: {
+                            rules: [{
+                              column_id: "{{QuoteStatusColumnId}}",
+                              compare_value: [{{statusLiteral}}],
+                              operator: any_of
+                            }]
+                          }
+                        ) {
+                          cursor
+                          items {
+                            id
+                            name
+                            created_at
+                            updated_at
+                            column_values(ids: [
+                              "color_mkwzq278",
+                              "color_mkx11vkd",
+                              "color_mkx0d9kz",
+                              "multiple_person_mkwzczf7",
+                              "link_mkwz6c7d",
+                              "date_mkx0jjg9",
+                              "text_mkwzxk51",
+                              "color_mkx1xcf3",
+                              "boolean_mkx14rhb",
+                              "pulse_id_mkwzzpv1",
+                              "long_text_mkwzm5c7",
+                              "long_text_mkwzjbsb",
+                              "text_mkx0w7k0",
+                              "text_mkx5czc4",
+                              "text_mkwz6emw",
+                              "lookup_mkwz95eh",
+                              "lookup_mkx4h3jj",
+                              "board_relation_mkwz6m8s",
+                              "board_relation_mkwztd18"
+                            ]) {
+                              id
+                              text
+                              value
+                            }
+                            subitems {
+                              id
+                              name
+                              column_values(ids: [
+                                "dropdown_mkwzk7cp",
+                                "long_text_mkxv2f3d",
+                                "numeric_mkwzdhvm",
+                                "numeric_mkwzp3g",
+                                "numeric_mkwz4a5m",
+                                "numeric_mkx47b9n"
+                              ]) {
+                                id
+                                text
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """;
+                variables = null;
+            }
+            else
+            {
+                query = $$"""
+                    query ($cursor: String!) {
+                      boards(ids: [{{boardId}}]) {
+                        id
+                        name
+                        items_page(limit: {{ItemsPageSize}}, cursor: $cursor) {
+                          cursor
+                          items {
+                            id
+                            name
+                            created_at
+                            updated_at
+                            column_values(ids: [
+                              "color_mkwzq278",
+                              "color_mkx11vkd",
+                              "color_mkx0d9kz",
+                              "multiple_person_mkwzczf7",
+                              "link_mkwz6c7d",
+                              "date_mkx0jjg9",
+                              "text_mkwzxk51",
+                              "color_mkx1xcf3",
+                              "boolean_mkx14rhb",
+                              "pulse_id_mkwzzpv1",
+                              "long_text_mkwzm5c7",
+                              "long_text_mkwzjbsb",
+                              "text_mkx0w7k0",
+                              "text_mkx5czc4",
+                              "text_mkwz6emw",
+                              "lookup_mkwz95eh",
+                              "lookup_mkx4h3jj",
+                              "board_relation_mkwz6m8s",
+                              "board_relation_mkwztd18"
+                            ]) {
+                              id
+                              text
+                              value
+                            }
+                            subitems {
+                              id
+                              name
+                              column_values(ids: [
+                                "dropdown_mkwzk7cp",
+                                "long_text_mkxv2f3d",
+                                "numeric_mkwzdhvm",
+                                "numeric_mkwzp3g",
+                                "numeric_mkwz4a5m",
+                                "numeric_mkx47b9n"
+                              ]) {
+                                id
+                                text
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """;
+                variables = new { cursor };
             }
 
-            if (_options.IncludedBoardNames.Length > 0 &&
-                !_options.IncludedBoardNames.Any(n =>
-                    string.Equals(n, boardName, StringComparison.OrdinalIgnoreCase)))
+            using var json = await PostGraphQlAsync(query, variables, cancellationToken);
+            if (!json.RootElement.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("boards", out var boards) ||
+                boards.GetArrayLength() == 0)
             {
-                continue;
+                break;
+            }
+
+            var board = boards[0];
+            var boardName = board.GetProperty("name").GetString() ?? "Board";
+            if (boardName.StartsWith("Subitems of ", StringComparison.OrdinalIgnoreCase) ||
+                IsExcludedBoard(boardName) ||
+                (_options.IncludedBoardNames.Length > 0 &&
+                 !_options.IncludedBoardNames.Any(n =>
+                     string.Equals(n, boardName, StringComparison.OrdinalIgnoreCase))))
+            {
+                break;
             }
 
             if (!board.TryGetProperty("items_page", out var page) ||
                 !page.TryGetProperty("items", out var boardItems))
             {
-                continue;
+                break;
             }
 
             foreach (var item in boardItems.EnumerateArray())
             {
-                var cols = ReadColumnTexts(item);
-                var id = item.GetProperty("id").ToString();
-                var title = item.GetProperty("name").GetString() ?? "(untitled)";
-                var quoteStatus = cols.GetValueOrDefault("color_mkwzq278", "");
-                var region = cols.GetValueOrDefault("color_mkx11vkd", "");
-                var quoteType = cols.GetValueOrDefault("color_mkx0d9kz", "");
-                var people = cols.GetValueOrDefault("multiple_person_mkwzczf7", "");
-                var mxLink = cols.GetValueOrDefault("link_mkwz6c7d", "");
-                var project = cols.GetValueOrDefault("text_mkwzxk51", "");
-                var handling = cols.GetValueOrDefault("color_mkx1xcf3", "");
-                var quoteNumber = cols.GetValueOrDefault("pulse_id_mkwzzpv1", "");
-                var scope = cols.GetValueOrDefault("long_text_mkwzm5c7", "");
-                var comments = cols.GetValueOrDefault("long_text_mkwzjbsb", "");
-                var poNumber = cols.GetValueOrDefault("text_mkx0w7k0", "");
-                var soNumber = cols.GetValueOrDefault("text_mkx5czc4", "");
-                var sapInvoice = cols.GetValueOrDefault("text_mkwz6emw", "");
-                var partsLabor = cols.GetValueOrDefault("lookup_mkwz95eh", "");
-                var dayRate = cols.GetValueOrDefault("lookup_mkx4h3jj", "");
-                var customer = cols.GetValueOrDefault("board_relation_mkwz6m8s", "");
-                var contact = cols.GetValueOrDefault("board_relation_mkwztd18", "");
-                var deadlineText = cols.GetValueOrDefault("date_mkx0jjg9", "");
-
-                var created = DateTimeOffset.TryParse(
-                    item.TryGetProperty("created_at", out var cAt) ? cAt.GetString() : null,
-                    out var createdAt)
-                    ? createdAt
-                    : (DateTimeOffset?)null;
-                var ageDays = created is null ? 0 : (int)(now - created.Value).TotalDays;
-                var aging = ageDays >= agingDays &&
-                            (quoteStatus.Equals("Sent", StringComparison.OrdinalIgnoreCase) ||
-                             quoteStatus.Equals("Draft", StringComparison.OrdinalIgnoreCase) ||
-                             string.IsNullOrWhiteSpace(quoteStatus));
-                var mxWorkOrderId = ExtractMaintainXWorkOrderId(mxLink);
-                var bucket = !string.IsNullOrWhiteSpace(mxWorkOrderId) ? "linked_to_maintainx"
-                    : aging ? "aging"
-                    : quoteStatus.Equals("Draft", StringComparison.OrdinalIgnoreCase) ? "draft_opportunity"
-                    : "pipeline";
-
-                var (subitemCount, subitemSummary, quoteTotal) = SummarizeQuoteSubitems(item);
-
-                var meta = new Dictionary<string, string>
+                // Clone into owned elements so the document can be disposed.
+                items.Add(item.Clone());
+                if (items.Count >= maxItems)
                 {
-                    ["boardName"] = boardName,
-                    ["quoteStatus"] = quoteStatus,
-                    ["region"] = region,
-                    ["quoteType"] = quoteType,
-                    ["project"] = project,
-                    ["handling"] = handling,
-                    ["ageDays"] = ageDays.ToString(),
-                    ["aging"] = aging ? "true" : "false",
-                    ["bucket"] = bucket,
-                    ["maintainXWorkOrderId"] = mxWorkOrderId ?? "",
-                    ["maintainXLink"] = mxLink,
-                    ["kind"] = "quote",
-                    ["quoteNumber"] = quoteNumber,
-                    ["scopeOfWork"] = Truncate(scope, 800),
-                    ["quoteComments"] = Truncate(comments, 500),
-                    ["poNumber"] = poNumber,
-                    ["soNumber"] = soNumber,
-                    ["sapInvoice"] = sapInvoice,
-                    ["partsLabor"] = Truncate(partsLabor, 400),
-                    ["dayRate"] = dayRate,
-                    ["customer"] = customer,
-                    ["contact"] = contact,
-                    ["deadline"] = deadlineText,
-                    ["subitemCount"] = subitemCount.ToString(),
-                    ["subitemSummary"] = Truncate(subitemSummary, 2500),
-                    ["amount"] = quoteTotal > 0 ? quoteTotal.ToString("0.##") : "",
-                    ["amountText"] = quoteTotal > 0 ? $"${quoteTotal:0.##}" : ""
-                };
+                    break;
+                }
+            }
 
-                items.Add(new ExternalWorkItemDto(
-                    "Monday",
-                    $"{_options.WorkspaceName} · {boardName}",
-                    id,
-                    title,
-                    string.IsNullOrWhiteSpace(quoteStatus) ? "Quotes" : quoteStatus,
-                    string.IsNullOrWhiteSpace(people) ? null : people,
-                    created,
-                    string.IsNullOrWhiteSpace(mxLink) ? null : mxLink.Split(' ').LastOrDefault(),
-                    meta));
+            cursor = page.TryGetProperty("cursor", out var cursorEl) &&
+                     cursorEl.ValueKind == JsonValueKind.String
+                ? cursorEl.GetString()
+                : null;
+            if (string.IsNullOrWhiteSpace(cursor) || boardItems.GetArrayLength() == 0)
+            {
+                break;
             }
         }
 
         return items;
+    }
+
+    private async Task<Dictionary<string, DateTimeOffset>> LoadBilledAtByItemIdAsync(
+        string boardId,
+        CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        var end = DateTimeOffset.UtcNow.AddDays(1);
+        var start = end.AddMonths(-14);
+
+        // Chunk by month so activity_logs limit (1000) does not drop conversions.
+        for (var cursor = StartOfUtcMonth(start); cursor < end; cursor = cursor.AddMonths(1))
+        {
+            var from = cursor.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+            var to = cursor.AddMonths(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+            var query = $$"""
+                query {
+                  boards(ids: [{{boardId}}]) {
+                    activity_logs(
+                      limit: 1000,
+                      column_ids: ["{{QuoteStatusColumnId}}"],
+                      from: "{{from}}",
+                      to: "{{to}}"
+                    ) {
+                      data
+                      created_at
+                    }
+                  }
+                }
+                """;
+
+            using var json = await PostGraphQlAsync(query, cancellationToken);
+            if (!json.RootElement.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("boards", out var boards) ||
+                boards.GetArrayLength() == 0 ||
+                !boards[0].TryGetProperty("activity_logs", out var logs))
+            {
+                continue;
+            }
+
+            foreach (var log in logs.EnumerateArray())
+            {
+                if (!TryParseActivityCreatedAt(log, out var when))
+                {
+                    continue;
+                }
+
+                var rawData = log.TryGetProperty("data", out var dataEl) ? dataEl.GetString() : null;
+                if (string.IsNullOrWhiteSpace(rawData))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var payload = JsonDocument.Parse(rawData);
+                    var root = payload.RootElement;
+                    if (!TryReadStatusLabel(root, "value", out var label) ||
+                        !label.Equals("Billed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var pulseId = root.TryGetProperty("pulse_id", out var pulseEl)
+                        ? pulseEl.ToString()
+                        : null;
+                    if (string.IsNullOrWhiteSpace(pulseId))
+                    {
+                        continue;
+                    }
+
+                    // Keep the latest transition into Billed for each quote.
+                    if (!map.TryGetValue(pulseId, out var existing) || when > existing)
+                    {
+                        map[pulseId] = when;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Ignore malformed activity payloads.
+                }
+            }
+        }
+
+        return map;
+    }
+
+    private static DateTimeOffset StartOfUtcMonth(DateTimeOffset value) =>
+        new(value.Year, value.Month, 1, 0, 0, 0, TimeSpan.Zero);
+
+    private static bool TryParseActivityCreatedAt(JsonElement log, out DateTimeOffset when)
+    {
+        when = default;
+        if (!log.TryGetProperty("created_at", out var createdEl))
+        {
+            return false;
+        }
+
+        if (createdEl.ValueKind == JsonValueKind.String)
+        {
+            var text = createdEl.GetString();
+            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var microsLike) &&
+                microsLike > 1_000_000_000_000)
+            {
+                // Monday activity created_at is unix seconds * 10_000_000.
+                when = DateTimeOffset.FromUnixTimeMilliseconds(microsLike / 10_000);
+                return true;
+            }
+
+            return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out when);
+        }
+
+        if (createdEl.ValueKind == JsonValueKind.Number && createdEl.TryGetInt64(out var numeric) &&
+            numeric > 1_000_000_000_000)
+        {
+            when = DateTimeOffset.FromUnixTimeMilliseconds(numeric / 10_000);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadStatusLabel(JsonElement root, string propertyName, out string label)
+    {
+        label = "";
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!value.TryGetProperty("label", out var labelEl) || labelEl.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!labelEl.TryGetProperty("text", out var textEl))
+        {
+            return false;
+        }
+
+        label = textEl.GetString()?.Trim() ?? "";
+        return !string.IsNullOrWhiteSpace(label);
+    }
+
+    private ExternalWorkItemDto? MapQuoteItem(
+        JsonElement item,
+        string boardNameFallback,
+        DateTimeOffset now,
+        int agingDays,
+        IReadOnlyDictionary<string, DateTimeOffset> billedAtByItem)
+    {
+        var cols = ReadColumnTexts(item);
+        var id = item.GetProperty("id").ToString();
+        var title = item.GetProperty("name").GetString() ?? "(untitled)";
+        var quoteStatus = cols.GetValueOrDefault("color_mkwzq278", "");
+        var region = cols.GetValueOrDefault("color_mkx11vkd", "");
+        var quoteType = cols.GetValueOrDefault("color_mkx0d9kz", "");
+        var people = cols.GetValueOrDefault("multiple_person_mkwzczf7", "");
+        var mxLink = cols.GetValueOrDefault("link_mkwz6c7d", "");
+        var project = cols.GetValueOrDefault("text_mkwzxk51", "");
+        var handling = cols.GetValueOrDefault("color_mkx1xcf3", "");
+        var quoteNumber = cols.GetValueOrDefault("pulse_id_mkwzzpv1", "");
+        var scope = cols.GetValueOrDefault("long_text_mkwzm5c7", "");
+        var comments = cols.GetValueOrDefault("long_text_mkwzjbsb", "");
+        var poNumber = cols.GetValueOrDefault("text_mkx0w7k0", "");
+        var soNumber = cols.GetValueOrDefault("text_mkx5czc4", "");
+        var sapInvoice = cols.GetValueOrDefault("text_mkwz6emw", "");
+        var partsLabor = cols.GetValueOrDefault("lookup_mkwz95eh", "");
+        var dayRate = cols.GetValueOrDefault("lookup_mkx4h3jj", "");
+        var customer = cols.GetValueOrDefault("board_relation_mkwz6m8s", "");
+        var contact = cols.GetValueOrDefault("board_relation_mkwztd18", "");
+        var deadlineText = cols.GetValueOrDefault("date_mkx0jjg9", "");
+
+        var created = DateTimeOffset.TryParse(
+            item.TryGetProperty("created_at", out var cAt) ? cAt.GetString() : null,
+            out var createdAt)
+            ? createdAt
+            : (DateTimeOffset?)null;
+        var updated = DateTimeOffset.TryParse(
+            item.TryGetProperty("updated_at", out var uAt) ? uAt.GetString() : null,
+            out var updatedAt)
+            ? updatedAt
+            : (DateTimeOffset?)null;
+        var ageDays = created is null ? 0 : (int)(now - created.Value).TotalDays;
+        var isBilled = quoteStatus.Equals("Billed", StringComparison.OrdinalIgnoreCase);
+        var aging = !isBilled &&
+                    ageDays >= agingDays &&
+                    (quoteStatus.Equals("Sent", StringComparison.OrdinalIgnoreCase) ||
+                     quoteStatus.Equals("Draft", StringComparison.OrdinalIgnoreCase) ||
+                     string.IsNullOrWhiteSpace(quoteStatus));
+        var mxWorkOrderId = ExtractMaintainXWorkOrderId(mxLink);
+        var bucket = isBilled ? "billed"
+            : !string.IsNullOrWhiteSpace(mxWorkOrderId) ? "linked_to_maintainx"
+            : aging ? "aging"
+            : quoteStatus.Equals("Draft", StringComparison.OrdinalIgnoreCase) ? "draft_opportunity"
+            : quoteStatus.Equals("Ready to be Billed", StringComparison.OrdinalIgnoreCase) ? "ready_to_bill"
+            : "pipeline";
+
+        DateTimeOffset? billedAt = null;
+        if (billedAtByItem.TryGetValue(id, out var fromActivity))
+        {
+            billedAt = fromActivity;
+        }
+        else if (isBilled && updated is not null)
+        {
+            billedAt = updated;
+        }
+
+        var (subitemCount, subitemSummary, quoteTotal) = SummarizeQuoteSubitems(item);
+        var boardName = boardNameFallback;
+
+        var meta = new Dictionary<string, string>
+        {
+            ["boardName"] = boardName,
+            ["quoteStatus"] = quoteStatus,
+            ["region"] = region,
+            ["quoteType"] = quoteType,
+            ["project"] = project,
+            ["handling"] = handling,
+            ["ageDays"] = ageDays.ToString(),
+            ["aging"] = aging ? "true" : "false",
+            ["bucket"] = bucket,
+            ["maintainXWorkOrderId"] = mxWorkOrderId ?? "",
+            ["maintainXLink"] = mxLink,
+            ["kind"] = "quote",
+            ["quoteNumber"] = quoteNumber,
+            ["scopeOfWork"] = Truncate(scope, 800),
+            ["quoteComments"] = Truncate(comments, 500),
+            ["poNumber"] = poNumber,
+            ["soNumber"] = soNumber,
+            ["sapInvoice"] = sapInvoice,
+            ["partsLabor"] = Truncate(partsLabor, 400),
+            ["dayRate"] = dayRate,
+            ["customer"] = customer,
+            ["contact"] = contact,
+            ["deadline"] = deadlineText,
+            ["updatedAt"] = updated?.ToString("o") ?? "",
+            ["billedAt"] = billedAt?.ToString("o") ?? "",
+            ["billedMonth"] = billedAt?.ToString("yyyy-MM") ?? "",
+            ["billedDate"] = billedAt?.ToString("yyyy-MM-dd") ?? "",
+            ["subitemCount"] = subitemCount.ToString(),
+            ["subitemSummary"] = Truncate(subitemSummary, 2500),
+            ["amount"] = quoteTotal > 0 ? quoteTotal.ToString("0.##") : "",
+            ["amountText"] = quoteTotal > 0 ? $"${quoteTotal:0.##}" : ""
+        };
+
+        return new ExternalWorkItemDto(
+            "Monday",
+            $"{_options.WorkspaceName} · {boardName}",
+            id,
+            title,
+            string.IsNullOrWhiteSpace(quoteStatus) ? "Quotes" : quoteStatus,
+            string.IsNullOrWhiteSpace(people) ? null : people,
+            created,
+            string.IsNullOrWhiteSpace(mxLink) ? null : mxLink.Split(' ').LastOrDefault(),
+            meta);
     }
 
     private static Dictionary<string, string> ReadColumnTexts(JsonElement item)

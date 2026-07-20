@@ -19,6 +19,8 @@ public interface IPalantirDbContext
     IQueryable<KnowledgeChunk> KnowledgeChunks { get; }
     IQueryable<AskSession> AskSessions { get; }
     IQueryable<AskMessage> AskMessages { get; }
+    IQueryable<OpsSnapshot> OpsSnapshots { get; }
+    IQueryable<AskAttachment> AskAttachments { get; }
 
     void Add<TEntity>(TEntity entity) where TEntity : class;
     void Remove<TEntity>(TEntity entity) where TEntity : class;

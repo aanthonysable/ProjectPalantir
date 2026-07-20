@@ -10,12 +10,19 @@ namespace Palantir.Api.Controllers;
 [Route("ask")]
 public sealed class AskController : ControllerBase
 {
+    private const long MaxAskUploadBytes = 64L * 1024 * 1024;
+
     private readonly IAskHistoryService _ask;
+    private readonly IAskAttachmentService _attachments;
     private readonly ICurrentUserAccessor _currentUser;
 
-    public AskController(IAskHistoryService ask, ICurrentUserAccessor currentUser)
+    public AskController(
+        IAskHistoryService ask,
+        IAskAttachmentService attachments,
+        ICurrentUserAccessor currentUser)
     {
         _ask = ask;
+        _attachments = attachments;
         _currentUser = currentUser;
     }
 
@@ -74,4 +81,110 @@ public sealed class AskController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    [HttpPost("attachments")]
+    [RequestSizeLimit(MaxAskUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxAskUploadBytes)]
+    public async Task<ActionResult<IReadOnlyList<AskAttachmentDto>>> UploadAttachments(
+        [FromForm] List<IFormFile>? files,
+        IFormFile? file,
+        [FromForm] Guid? sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null || _currentUser.UserId is null)
+        {
+            return Unauthorized();
+        }
+
+        var uploads = new List<IFormFile>();
+        if (files is { Count: > 0 })
+        {
+            uploads.AddRange(files.Where(f => f is { Length: > 0 }));
+        }
+
+        if (file is { Length: > 0 })
+        {
+            uploads.Add(file);
+        }
+
+        uploads = uploads
+            .GroupBy(f => $"{f.FileName}:{f.Length}")
+            .Select(g => g.First())
+            .ToList();
+
+        if (uploads.Count == 0)
+        {
+            return BadRequest(new { error = "Choose at least one file." });
+        }
+
+        try
+        {
+            var payloads = new List<(string, string, Stream, long)>();
+            var streams = new List<Stream>();
+            try
+            {
+                foreach (var upload in uploads)
+                {
+                    var stream = upload.OpenReadStream();
+                    streams.Add(stream);
+                    payloads.Add((
+                        upload.FileName,
+                        upload.ContentType ?? "application/octet-stream",
+                        stream,
+                        upload.Length));
+                }
+
+                var result = await _attachments.UploadAsync(
+                    _currentUser.OrganizationId.Value,
+                    _currentUser.UserId.Value,
+                    sessionId,
+                    payloads,
+                    cancellationToken);
+                return Ok(result);
+            }
+            finally
+            {
+                foreach (var stream in streams)
+                {
+                    await stream.DisposeAsync();
+                }
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("attachments/{attachmentId:guid}/promote")]
+    public async Task<ActionResult<AskAttachmentPromoteResult>> Promote(
+        Guid attachmentId,
+        [FromBody] PromoteAskAttachmentBody? body,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null || _currentUser.UserId is null)
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var result = await _attachments.PromoteToKnowledgeAsync(
+                _currentUser.OrganizationId.Value,
+                _currentUser.UserId.Value,
+                attachmentId,
+                body?.Title,
+                cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+}
+
+public sealed class PromoteAskAttachmentBody
+{
+    public string? Title { get; set; }
 }

@@ -9,9 +9,11 @@ using Palantir.Application.Auth;
 using Palantir.Application.Azure;
 using Palantir.Application.Connectors;
 using Palantir.Application.Knowledge;
+using Palantir.Application.Overview;
 using Palantir.Infrastructure.Ai;
 using Palantir.Infrastructure.Connectors;
 using Palantir.Infrastructure.Knowledge;
+using Palantir.Infrastructure.Overview;
 using Palantir.Infrastructure.Persistence;
 using Palantir.Infrastructure.Services;
 
@@ -48,13 +50,18 @@ public static class InfrastructureServiceCollectionExtensions
         services.Configure<MondayOptions>(
             configuration.GetSection(MondayOptions.SectionName));
         services.Configure<AiOptions>(configuration.GetSection(AiOptions.SectionName));
+        services.Configure<OpsSnapshotOptions>(configuration.GetSection(OpsSnapshotOptions.SectionName));
         services.Configure<PilotJwtOptions>(configuration.GetSection(PilotJwtOptions.SectionName));
         services.Configure<AzureOptions>(configuration.GetSection(AzureOptions.SectionName));
 
         services.AddMemoryCache();
         services.AddHttpClient("microsoft-graph");
         services.AddHttpClient("maintainx");
-        services.AddHttpClient("ezrentout");
+        services.AddHttpClient("ezrentout", client =>
+        {
+            // Checked-out filter can span many pages; allow parallel pulls to finish.
+            client.Timeout = TimeSpan.FromMinutes(2);
+        });
         services.AddHttpClient("monday");
         services.AddHttpClient("palantir-ai", client =>
         {
@@ -71,6 +78,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IOpsConnectorHealthService, OpsConnectorHealthService>();
         services.AddSingleton<IAccountingConnector, UnconfiguredAccountingConnector>();
         services.AddScoped<IAiCompletionClient, OpenAiCompatibleCompletionClient>();
+        services.AddScoped<IOpsSnapshotStore, OpsSnapshotStore>();
         services.AddSingleton<IBlobKnowledgeStore>(sp =>
         {
             var azure = sp.GetRequiredService<IOptions<AzureOptions>>().Value;
@@ -80,6 +88,7 @@ public static class InfrastructureServiceCollectionExtensions
         });
         services.AddSingleton<IKnowledgeIndexQueue, KnowledgeIndexQueue>();
         services.AddHostedService<KnowledgeIndexBackgroundService>();
+        services.AddHostedService<OpsSnapshotRefreshBackgroundService>();
 
         return services;
     }

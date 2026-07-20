@@ -33,6 +33,8 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     public DbSet<KnowledgeChunk> KnowledgeChunks => Set<KnowledgeChunk>();
     public DbSet<AskSession> AskSessions => Set<AskSession>();
     public DbSet<AskMessage> AskMessages => Set<AskMessage>();
+    public DbSet<OpsSnapshot> OpsSnapshots => Set<OpsSnapshot>();
+    public DbSet<AskAttachment> AskAttachments => Set<AskAttachment>();
 
     IQueryable<Organization> IPalantirDbContext.Organizations => Organizations;
     IQueryable<User> IPalantirDbContext.Users => Users;
@@ -49,6 +51,8 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     IQueryable<KnowledgeChunk> IPalantirDbContext.KnowledgeChunks => KnowledgeChunks;
     IQueryable<AskSession> IPalantirDbContext.AskSessions => AskSessions;
     IQueryable<AskMessage> IPalantirDbContext.AskMessages => AskMessages;
+    IQueryable<OpsSnapshot> IPalantirDbContext.OpsSnapshots => OpsSnapshots;
+    IQueryable<AskAttachment> IPalantirDbContext.AskAttachments => AskAttachments;
 
     public new void Add<TEntity>(TEntity entity) where TEntity : class => base.Add(entity);
     public new void Remove<TEntity>(TEntity entity) where TEntity : class => base.Remove(entity);

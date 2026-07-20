@@ -26,7 +26,7 @@ public sealed class OverviewController : ControllerBase
         [FromQuery] bool includeApprovals = false,
         [FromQuery] bool includeMaintainX = true,
         [FromQuery] bool includeMaintainXInventory = true,
-        [FromQuery] bool includeEZRentOut = false,
+        [FromQuery] bool includeEZRentOut = true,
         [FromQuery] bool includeMonday = true,
         [FromQuery] bool includeConnectorHealth = true,
         CancellationToken cancellationToken = default)

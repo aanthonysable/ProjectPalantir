@@ -298,3 +298,41 @@ public sealed class AskMessageConfiguration : IEntityTypeConfiguration<AskMessag
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public sealed class OpsSnapshotConfiguration : IEntityTypeConfiguration<OpsSnapshot>
+{
+    public void Configure(EntityTypeBuilder<OpsSnapshot> builder)
+    {
+        builder.ToTable("OpsSnapshots");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.FocusKey).HasMaxLength(120).IsRequired();
+        builder.Property(x => x.Status).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.Error).HasMaxLength(500);
+        builder.Property(x => x.SnapshotJson).IsRequired();
+        builder.HasIndex(x => new { x.OrganizationId, x.FocusKey }).IsUnique();
+        builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class AskAttachmentConfiguration : IEntityTypeConfiguration<AskAttachment>
+{
+    public void Configure(EntityTypeBuilder<AskAttachment> builder)
+    {
+        builder.ToTable("AskAttachments");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.FileName).HasMaxLength(260).IsRequired();
+        builder.Property(x => x.ContentType).HasMaxLength(120).IsRequired();
+        builder.Property(x => x.BlobPath).HasMaxLength(500);
+        builder.Property(x => x.ExtractStatus).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.ExtractedText).IsRequired();
+        builder.HasIndex(x => new { x.OrganizationId, x.UserId, x.CreatedAt });
+        builder.HasIndex(x => x.SessionId);
+        builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne(x => x.Session).WithMany().HasForeignKey(x => x.SessionId)
+            .OnDelete(DeleteBehavior.SetNull);
+    }
+}

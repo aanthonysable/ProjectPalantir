@@ -25,6 +25,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAiAssistantService, AiAssistantService>();
         services.AddScoped<IOverviewService, OverviewService>();
         services.AddScoped<IAskHistoryService, AskHistoryService>();
+        services.AddScoped<IAskAttachmentService, AskAttachmentService>();
         services.AddScoped<IKnowledgeService, KnowledgeService>();
         services.AddScoped<IKnowledgeCaptureService, KnowledgeCaptureService>();
         return services;

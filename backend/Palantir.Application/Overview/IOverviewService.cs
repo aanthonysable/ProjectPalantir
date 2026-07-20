@@ -13,7 +13,7 @@ public sealed class OverviewFocus
     public bool IncludeApprovals { get; set; } = false;
     public bool IncludeMaintainX { get; set; } = true;
     public bool IncludeMaintainXInventory { get; set; } = true;
-    public bool IncludeEZRentOut { get; set; } = false;
+    public bool IncludeEZRentOut { get; set; } = true;
     public bool IncludeMonday { get; set; } = true;
     public bool IncludeConnectorHealth { get; set; } = true;
 
@@ -55,7 +55,8 @@ public sealed record OverviewSnapshotDto(
     IReadOnlyList<OverviewListItemDto> RecentConversations,
     IReadOnlyList<OverviewListItemDto> OpenTasks,
     IReadOnlyList<OverviewListItemDto> PendingApprovals,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    IReadOnlyList<EzRentOrderDto> EzRentOrders);
 
 public sealed record OverviewListItemDto(
     string Id,
@@ -80,13 +81,17 @@ public sealed class OverviewChatRequest
     public List<OverviewChatTurnDto> Messages { get; set; } = [];
 
     /// <summary>
-    /// When true (default), rebuild live facts. When false, reuse a short-lived cached snapshot
-    /// for follow-up questions in the same session.
+    /// When true, rebuild live connector facts and upsert the shared DB snapshot.
+    /// When false (default), prefer the shared org ops snapshot from the database
+    /// so all users reuse the same pull. Background refresh keeps it warm.
     /// </summary>
-    public bool RefreshFacts { get; set; } = true;
+    public bool RefreshFacts { get; set; } = false;
 
     /// <summary>Existing Ask chat session to append to. Null starts a new chat.</summary>
     public Guid? SessionId { get; set; }
+
+    /// <summary>Ask attachment ids uploaded via POST /ask/attachments for this turn.</summary>
+    public List<Guid> AttachmentIds { get; set; } = [];
 }
 
 public sealed record OverviewChatReplyDto(

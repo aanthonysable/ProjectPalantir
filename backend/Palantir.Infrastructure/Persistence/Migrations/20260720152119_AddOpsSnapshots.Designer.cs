@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Palantir.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Palantir.Infrastructure.Persistence;
 namespace Palantir.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PalantirDbContext))]
-    partial class PalantirDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260720152119_AddOpsSnapshots")]
+    partial class AddOpsSnapshots
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -63,64 +66,6 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.HasIndex("RequestedForUserId");
 
                     b.ToTable("ApprovalRequests", (string)null);
-                });
-
-            modelBuilder.Entity("Palantir.Domain.Entities.AskAttachment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("BlobPath")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<long>("ByteSize")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("ContentType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("ExtractStatus")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.Property<string>("ExtractedText")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("nvarchar(260)");
-
-                    b.Property<Guid?>("KnowledgeDocumentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("SessionId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SessionId");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("OrganizationId", "UserId", "CreatedAt");
-
-                    b.ToTable("AskAttachments", (string)null);
                 });
 
             modelBuilder.Entity("Palantir.Domain.Entities.AskMessage", b =>
@@ -1045,32 +990,6 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Navigation("Draft");
 
                     b.Navigation("RequestedForUser");
-                });
-
-            modelBuilder.Entity("Palantir.Domain.Entities.AskAttachment", b =>
-                {
-                    b.HasOne("Palantir.Domain.Entities.Organization", "Organization")
-                        .WithMany()
-                        .HasForeignKey("OrganizationId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.HasOne("Palantir.Domain.Entities.AskSession", "Session")
-                        .WithMany()
-                        .HasForeignKey("SessionId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Palantir.Domain.Entities.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Organization");
-
-                    b.Navigation("Session");
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Palantir.Domain.Entities.AskMessage", b =>

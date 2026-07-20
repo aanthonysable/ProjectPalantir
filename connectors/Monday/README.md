@@ -14,6 +14,9 @@ Recaps emphasize:
 - Quotes open a long time (default ≥ 14 days in Sent/Draft)
 - Draft opportunities
 - Quotes with MaintainX WO links (and whether that WO is still open)
+- Quotes converted to **Billed** (status-change date from Monday activity logs), for questions like “which quotes billed in June”
+
+Quote Status labels: Sent, Approved, Declined, Billed, Ready to be Billed, Draft, Ready to be Closed, EXPIRED, PENDING FINAL APPROVAL.
 
 ## Write-back (Ops-4)
 
