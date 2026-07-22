@@ -216,6 +216,8 @@ public sealed class MaintainXConnector : IMaintainXConnector
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
         }
 
+        var locationName = ReadMaintainXLocationName(wo);
+
         return new ExternalWorkItemDto(
             "MaintainX",
             environment.Name,
@@ -236,8 +238,35 @@ public sealed class MaintainXConnector : IMaintainXConnector
                 ["completedAt"] = kind == "completed" ? (updated?.ToString("u") ?? "") : "",
                 ["priority"] = ReadString(wo, "priority") ?? "",
                 ["description"] = description,
-                ["categories"] = categories
+                ["categories"] = categories,
+                ["location"] = locationName ?? "",
+                // When MaintainX locations represent customer sites, surface them for CRM.
+                ["customer"] = locationName ?? ""
             });
+    }
+
+    private static string? ReadMaintainXLocationName(JsonElement wo)
+    {
+        if (wo.TryGetProperty("location", out var loc) && loc.ValueKind == JsonValueKind.Object)
+        {
+            return ReadString(loc, "name")?.Trim();
+        }
+
+        if (wo.TryGetProperty("locations", out var locs) && locs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in locs.EnumerateArray())
+            {
+                var name = item.ValueKind == JsonValueKind.Object
+                    ? ReadString(item, "name")
+                    : item.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    return name.Trim();
+                }
+            }
+        }
+
+        return null;
     }
 
     private static string ResolveAssignees(JsonElement wo, IReadOnlyDictionary<long, string> users)
@@ -940,6 +969,8 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
 
         var net = ReadAssetDecimal(basket, "net_amount") ?? 0m;
         var gross = ReadAssetDecimal(basket, "gross_amount") ?? net;
+        var assets = ReadBasketAssetNames(basket);
+        var jobLabel = ReadBasketJobLabel(basket);
 
         return new EzRentOrderDto(
             id,
@@ -950,7 +981,76 @@ public sealed class EZRentOutConnector : IEZRentOutConnector
             ReadAssetDate(basket, "bill_from"),
             ReadAssetDate(basket, "bill_to"),
             ReadAssetDate(basket, "checked_out_on"),
-            ReadAssetDate(basket, "completed_on"));
+            ReadAssetDate(basket, "completed_on"),
+            assets.Count,
+            jobLabel,
+            assets.Count == 0
+                ? null
+                : string.Join(", ", assets.Take(4)) + (assets.Count > 4 ? $" (+{assets.Count - 4} more)" : ""),
+            assets);
+    }
+
+    private static List<string> ReadBasketAssetNames(JsonElement basket)
+    {
+        var names = new List<string>();
+        void TakeFrom(string property)
+        {
+            if (!basket.TryGetProperty(property, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (var item in arr.EnumerateArray())
+            {
+                var name = ReadAssetString(item, "name")
+                    ?? (item.TryGetProperty("asset", out var asset) && asset.ValueKind == JsonValueKind.Object
+                        ? ReadAssetString(asset, "name")
+                        : null);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    names.Add(name.Trim());
+                }
+            }
+        }
+
+        TakeFrom("fixed_asset_rents");
+        TakeFrom("stock_asset_rents");
+        if (names.Count == 0)
+        {
+            TakeFrom("order_line_items");
+        }
+
+        return names
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? ReadBasketJobLabel(JsonElement basket)
+    {
+        if (!basket.TryGetProperty("custom_attributes", out var attrs) ||
+            attrs.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var attr in attrs.EnumerateArray())
+        {
+            var value = ReadAssetString(attr, "string_value")?.Trim();
+            if (string.IsNullOrWhiteSpace(value) || value.Length < 2 || value.Length > 80)
+            {
+                continue;
+            }
+
+            // Prefer short job/well-style labels over long prose.
+            if (value.Contains(' ') && value.Length > 48)
+            {
+                continue;
+            }
+
+            return value;
+        }
+
+        return null;
     }
 
     private async Task<List<ExternalWorkItemDto>> FetchAllCheckedOutAsync(CancellationToken cancellationToken)

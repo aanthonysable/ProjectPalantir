@@ -8,6 +8,7 @@ public enum AiTaskKind
     Summarize = 3,
     DraftReply = 4,
     DescribeImage = 5,
+    FollowUp = 6,
 }
 
 public sealed class AiProviderOptions
@@ -39,6 +40,7 @@ public sealed class AiTaskRoutingOptions
     public string Summarize { get; set; } = "default";
     public string DraftReply { get; set; } = "default";
     public string DescribeImage { get; set; } = "gemini";
+    public string FollowUp { get; set; } = "gemini";
 }
 
 public sealed class AiOptions
@@ -70,6 +72,7 @@ public sealed class AiOptions
             AiTaskKind.Summarize => FirstNonEmpty(Tasks.Summarize, "default"),
             AiTaskKind.DraftReply => FirstNonEmpty(Tasks.DraftReply, "default"),
             AiTaskKind.DescribeImage => FirstNonEmpty(Tasks.DescribeImage, "gemini", "default"),
+            AiTaskKind.FollowUp => FirstNonEmpty(Tasks.FollowUp, Tasks.Chat, "gemini", "default"),
             _ => "default",
         };
 

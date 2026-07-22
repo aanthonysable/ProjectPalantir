@@ -6,8 +6,11 @@ public interface IPalantirDbContext
 {
     IQueryable<Organization> Organizations { get; }
     IQueryable<User> Users { get; }
+    IQueryable<Customer> Customers { get; }
+    IQueryable<Contact> Contacts { get; }
     IQueryable<Conversation> Conversations { get; }
     IQueryable<Message> Messages { get; }
+    IQueryable<MessageAttachment> MessageAttachments { get; }
     IQueryable<Draft> Drafts { get; }
     IQueryable<ApprovalRequest> ApprovalRequests { get; }
     IQueryable<AuditEvent> AuditEvents { get; }

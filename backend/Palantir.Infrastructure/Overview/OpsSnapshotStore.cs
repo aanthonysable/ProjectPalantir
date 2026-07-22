@@ -42,10 +42,40 @@ public sealed class OpsSnapshotStore : IOpsSnapshotStore
             return null;
         }
 
+        return Deserialize(row.SnapshotJson, organizationId, focusKey);
+    }
+
+    public async Task<OverviewSnapshotDto?> TryGetLatestReadyAsync(
+        Guid organizationId,
+        string focusKey,
+        CancellationToken cancellationToken = default)
+    {
+        // Prefer an explicit Ready row, but while a refresh is in flight the row is marked
+        // Refreshing and still holds the previous SnapshotJson — keep serving that.
+        var row = await _db.OpsSnapshots.AsNoTracking()
+            .Where(x =>
+                x.OrganizationId == organizationId &&
+                x.FocusKey == focusKey &&
+                (x.Status == "Ready" || x.Status == "Refreshing") &&
+                x.SnapshotJson != null &&
+                x.SnapshotJson != "" &&
+                x.SnapshotJson != "{}")
+            .OrderByDescending(x => x.GeneratedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return Deserialize(row.SnapshotJson, organizationId, focusKey);
+    }
+
+    private OverviewSnapshotDto? Deserialize(string json, Guid organizationId, string focusKey)
+    {
         try
         {
-            var snapshot = JsonSerializer.Deserialize<OverviewSnapshotDto>(row.SnapshotJson, JsonOptions);
-            return snapshot;
+            return JsonSerializer.Deserialize<OverviewSnapshotDto>(json, JsonOptions);
         }
         catch (Exception ex)
         {

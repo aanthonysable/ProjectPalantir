@@ -4,8 +4,7 @@ namespace Palantir.Application.Ai;
 
 public sealed record ConversationSummaryResult(
     Guid ConversationId,
-    string Summary,
-    Guid? InternalNoteMessageId);
+    string Summary);
 
 public interface IAiAssistantService
 {

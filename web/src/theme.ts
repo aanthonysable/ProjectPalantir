@@ -1,9 +1,21 @@
+export type ThemeMode = 'professional' | 'themed'
+
 export type ThemeColors = {
+  mode: ThemeMode
   primary: string
   secondary: string
 }
 
+/** Light professional chrome — soft gray chrome, white reading surfaces. */
+export const PROFESSIONAL_THEME: ThemeColors = {
+  mode: 'professional',
+  primary: '#1f2937',
+  secondary: '#6b7280',
+}
+
+/** Default themed (colored) palette. */
 export const DEFAULT_THEME: ThemeColors = {
+  mode: 'themed',
   primary: '#3d8f6a',
   secondary: '#c48a5a',
 }
@@ -11,10 +23,26 @@ export const DEFAULT_THEME: ThemeColors = {
 const THEME_KEY = 'palantir.theme.v1'
 
 export const THEME_PRESETS: { id: string; label: string; colors: ThemeColors }[] = [
-  { id: 'sable', label: 'Sable green', colors: { primary: '#3d8f6a', secondary: '#c48a5a' } },
-  { id: 'slate', label: 'Slate & brass', colors: { primary: '#5b7c8a', secondary: '#c9a227' } },
-  { id: 'ember', label: 'Ember', colors: { primary: '#b85c38', secondary: '#d4a574' } },
-  { id: 'night', label: 'Night teal', colors: { primary: '#2a9d8f', secondary: '#e9c46a' } },
+  {
+    id: 'sable',
+    label: 'Sable green',
+    colors: { mode: 'themed', primary: '#3d8f6a', secondary: '#c48a5a' },
+  },
+  {
+    id: 'slate',
+    label: 'Slate & brass',
+    colors: { mode: 'themed', primary: '#5b7c8a', secondary: '#c9a227' },
+  },
+  {
+    id: 'ember',
+    label: 'Ember',
+    colors: { mode: 'themed', primary: '#b85c38', secondary: '#d4a574' },
+  },
+  {
+    id: 'night',
+    label: 'Night teal',
+    colors: { mode: 'themed', primary: '#2a9d8f', secondary: '#e9c46a' },
+  },
 ]
 
 export function isHexColor(value: string): boolean {
@@ -23,15 +51,31 @@ export function isHexColor(value: string): boolean {
 
 export function loadTheme(): ThemeColors {
   const raw = localStorage.getItem(THEME_KEY)
-  if (!raw) return { ...DEFAULT_THEME }
+  if (!raw) return { ...PROFESSIONAL_THEME }
   try {
     const parsed = JSON.parse(raw) as Partial<ThemeColors>
-    const primary = parsed.primary && isHexColor(parsed.primary) ? parsed.primary : DEFAULT_THEME.primary
+    const mode: ThemeMode =
+      parsed.mode === 'professional'
+        ? 'professional'
+        : parsed.mode === 'themed'
+          ? 'themed'
+          : // Legacy saves had colors only — keep them in Themed mode.
+            'themed'
+    const primary =
+      parsed.primary && isHexColor(parsed.primary)
+        ? parsed.primary
+        : mode === 'professional'
+          ? PROFESSIONAL_THEME.primary
+          : DEFAULT_THEME.primary
     const secondary =
-      parsed.secondary && isHexColor(parsed.secondary) ? parsed.secondary : DEFAULT_THEME.secondary
-    return { primary, secondary }
+      parsed.secondary && isHexColor(parsed.secondary)
+        ? parsed.secondary
+        : mode === 'professional'
+          ? PROFESSIONAL_THEME.secondary
+          : DEFAULT_THEME.secondary
+    return { mode, primary, secondary }
   } catch {
-    return { ...DEFAULT_THEME }
+    return { ...PROFESSIONAL_THEME }
   }
 }
 
@@ -77,11 +121,13 @@ function relativeLuminance(hex: string): number {
 }
 
 function buildFaviconSvg(theme: ThemeColors): string {
-  const { primary, secondary } = theme
+  const { primary, secondary, mode } = theme
+  const plate = mode === 'professional' ? '#e8eaee' : '#101214'
+  const mark = mode === 'professional' ? '#1f2937' : primary
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#101214"/>
+  <rect width="64" height="64" rx="14" fill="${plate}"/>
   <rect x="3" y="3" width="58" height="58" rx="12" fill="none" stroke="${secondary}" stroke-width="2.5" opacity="0.85"/>
-  <path d="M20 48V16h16.5c7.2 0 12 4.2 12 10.8 0 6.5-4.8 10.7-12 10.7H28v10.5H20zm8-17.2h7.8c3.1 0 5.1-1.7 5.1-4.4s-2-4.4-5.1-4.4H28v8.8z" fill="${primary}"/>
+  <path d="M20 48V16h16.5c7.2 0 12 4.2 12 10.8 0 6.5-4.8 10.7-12 10.7H28v10.5H20zm8-17.2h7.8c3.1 0 5.1-1.7 5.1-4.4s-2-4.4-5.1-4.4H28v8.8z" fill="${mark}"/>
   <circle cx="46" cy="18" r="3.2" fill="${secondary}"/>
 </svg>`
 }
@@ -99,11 +145,34 @@ function setFavicon(theme: ThemeColors) {
   link.href = href
 }
 
-/** Tint the whole chrome from primary/secondary — not just buttons. */
-export function applyTheme(theme: ThemeColors) {
-  if (!isHexColor(theme.primary) || !isHexColor(theme.secondary)) return
+function applyProfessionalTheme(root: HTMLElement, theme: ThemeColors) {
+  // Soft light hierarchy: gray chrome, white reading surfaces (avoids harsh white-on-white).
+  root.style.setProperty('--bg', '#f3f4f6')
+  root.style.setProperty('--bg-elevated', '#e8eaee')
+  root.style.setProperty('--bg-panel', '#ffffff')
+  root.style.setProperty('--line', '#d1d5db')
+  root.style.setProperty('--text', '#1f2937')
+  root.style.setProperty('--muted', '#6b7280')
+  root.style.setProperty('--accent', theme.primary)
+  root.style.setProperty('--accent-soft', softRgba(theme.primary, 0.12))
+  // Keep accent labels readable on light surfaces (don't bleach toward white).
+  root.style.setProperty('--accent-bright', mix(theme.primary, '#111827', 0.15))
+  root.style.setProperty(
+    '--on-accent',
+    relativeLuminance(theme.primary) > 0.55 ? '#111827' : '#ffffff',
+  )
+  root.style.setProperty('--secondary', theme.secondary)
+  root.style.setProperty('--secondary-soft', softRgba(theme.secondary, 0.14))
+  root.style.setProperty('--glow-primary', 'transparent')
+  root.style.setProperty('--glow-secondary', 'transparent')
+  root.style.setProperty('--brand-mark-fg', theme.primary)
+  root.style.setProperty('--warn', '#b45309')
+  root.style.setProperty('--danger', '#b91c1c')
+  root.dataset.themeMode = 'professional'
+  root.style.background = 'var(--bg)'
+}
 
-  const root = document.documentElement
+function applyThemedTheme(root: HTMLElement, theme: ThemeColors) {
   const { primary, secondary } = theme
   const ink = '#101214'
   const paper = '#f3f1ec'
@@ -134,8 +203,23 @@ export function applyTheme(theme: ThemeColors) {
   root.style.setProperty('--glow-primary', glowPrimary)
   root.style.setProperty('--glow-secondary', glowSecondary)
   root.style.setProperty('--brand-mark-fg', accentBright)
-  root.dataset.themePrimary = primary
-  root.dataset.themeSecondary = secondary
+  root.dataset.themeMode = 'themed'
+  root.style.background = ''
+}
+
+/** Apply chrome from mode + optional primary/secondary (themed only). */
+export function applyTheme(theme: ThemeColors) {
+  if (!isHexColor(theme.primary) || !isHexColor(theme.secondary)) return
+
+  const root = document.documentElement
+  root.dataset.themePrimary = theme.primary
+  root.dataset.themeSecondary = theme.secondary
+
+  if (theme.mode === 'professional') {
+    applyProfessionalTheme(root, theme)
+  } else {
+    applyThemedTheme(root, theme)
+  }
 
   setFavicon(theme)
 }

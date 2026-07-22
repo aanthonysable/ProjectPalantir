@@ -58,9 +58,9 @@ public sealed class OutboundEmailService : IOutboundEmailService
         }
 
         var account = ResolveConnectedAccount(userId, connectedAccountId);
-        var toAddress = ResolveReplyToAddress(conversationId)
+        var toAddress = ResolveReplyToAddress(conversationId, account)
             ?? throw new InvalidOperationException(
-                "Could not determine a recipient from this thread. Sync Outlook mail first.");
+                "Could not determine a recipient from this thread. Sync email first.");
 
         var subject = conversation.Subject?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true
             ? conversation.Subject!
@@ -305,15 +305,16 @@ public sealed class OutboundEmailService : IOutboundEmailService
                    .ToList()
                    .OrderByDescending(a => a.UpdatedAt)
                    .FirstOrDefault()
-               ?? throw new InvalidOperationException("Connect Outlook before sending email.");
+               ?? throw new InvalidOperationException("Connect an email account before sending.");
     }
 
-    private string? ResolveReplyToAddress(Guid conversationId)
+    private string? ResolveReplyToAddress(Guid conversationId, ConnectedAccount account)
     {
+        var self = account.PrimaryAddress;
         var messages = _db.Messages
             .Where(m => m.ConversationId == conversationId)
             .ToList()
-            .OrderBy(m => m.CreatedAt)
+            .OrderByDescending(m => m.CreatedAt)
             .ToList();
 
         foreach (var message in messages)
@@ -327,7 +328,8 @@ public sealed class OutboundEmailService : IOutboundEmailService
             {
                 using var doc = JsonDocument.Parse(message.ProviderMetadataJson);
                 if (doc.RootElement.TryGetProperty("from", out var from) &&
-                    from.GetString() is { Length: > 0 } address)
+                    from.GetString() is { Length: > 0 } address &&
+                    !SameEmail(address, self))
                 {
                     return address;
                 }
@@ -347,13 +349,29 @@ public sealed class OutboundEmailService : IOutboundEmailService
 
             const string prefix = "From: ";
             var line = message.Body.Split('\n').FirstOrDefault(l => l.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-            if (line is not null)
+            if (line is null)
             {
-                return line[prefix.Length..].Trim();
+                continue;
+            }
+
+            var address = line[prefix.Length..].Trim();
+            if (!SameEmail(address, self))
+            {
+                return address;
             }
         }
 
         return null;
+    }
+
+    private static bool SameEmail(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+        {
+            return false;
+        }
+
+        return string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static DraftMeta ParseDraftMeta(string? json)

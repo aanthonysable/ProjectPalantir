@@ -19,6 +19,19 @@ export type Conversation = {
   assignedTeamId: string | null
   createdAt: string
   updatedAt: string
+  sourceConnectedAccountId?: string | null
+  sourceMailboxKind?: string | null
+  isUnread?: boolean
+}
+
+export type MessageAttachment = {
+  id: string
+  messageId: string
+  fileName: string
+  contentType: string
+  byteSize: number
+  isInline: boolean
+  canDownload: boolean
 }
 
 export type Message = {
@@ -30,6 +43,8 @@ export type Message = {
   senderUserId: string | null
   isInternalNote: boolean
   createdAt: string
+  attachments?: MessageAttachment[]
+  fromDisplay?: string | null
 }
 
 export type TaskItem = {
@@ -256,6 +271,46 @@ export const getConversation = (id: string) =>
 export const listMessages = (conversationId: string) =>
   api<Message[]>(`/conversations/${conversationId}/messages`)
 
+export async function downloadMessageAttachment(
+  conversationId: string,
+  messageId: string,
+  attachmentId: string,
+  fileName: string,
+): Promise<void> {
+  const token = getAccessToken()
+  const response = await fetch(
+    `/api/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}`,
+    {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    },
+  )
+  if (response.status === 401) {
+    clearSession()
+    throw new ApiError(401, 'Session expired — sign in again.')
+  }
+  if (!response.ok) {
+    const text = await response.text()
+    let message = text || `Download failed (${response.status})`
+    try {
+      const parsed = JSON.parse(text) as { error?: string }
+      if (parsed.error) message = parsed.error
+    } catch {
+      /* keep message */
+    }
+    throw new ApiError(response.status, message)
+  }
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName || 'attachment'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
 export const addMessage = (
   conversationId: string,
   body: string,
@@ -294,6 +349,127 @@ export const createTask = (title: string, description?: string) =>
 export const completeTask = (taskId: string) =>
   api<TaskItem>(`/tasks/${taskId}/complete`, { method: 'POST' })
 
+export type FollowUpScanResult = {
+  organizationId: string
+  conversationsReviewed: number
+  proposals: number
+  tasksCreated: number
+  notes: string[]
+}
+
+export const scanFollowUps = () =>
+  api<FollowUpScanResult>('/follow-ups/scan', { method: 'POST' })
+
+export type CustomerSummary = {
+  id: string
+  name: string
+  contactCount: number
+  conversationCount: number
+  openTaskCount: number
+  workOrderCount: number
+  quoteCount: number
+  rentalCount: number
+  orderCount: number
+  lastActivityAt: string | null
+}
+
+export type CustomerContact = {
+  id: string
+  customerId: string | null
+  displayName: string
+  email: string | null
+  phone: string | null
+}
+
+export type CustomerActivity = {
+  kind: string
+  title: string
+  detail: string | null
+  occurredAt: string | null
+  url: string | null
+  conversationId: string | null
+  sourceSystem: string | null
+}
+
+export type CustomerDetail = {
+  id: string
+  name: string
+  contacts: CustomerContact[]
+  activity: CustomerActivity[]
+  conversationCount: number
+  openTaskCount: number
+  workOrderCount: number
+  quoteCount: number
+  rentalCount: number
+  orderCount: number
+  companyOverview: string | null
+  overviewGeneratedAt: string | null
+}
+
+export type CustomerCompanyOverview = {
+  customerId: string
+  name: string
+  overview: string
+  generatedAt: string
+  fromCache: boolean
+  sourceNote: string | null
+}
+
+export type CustomerReconcileResult = {
+  customersUpserted: number
+  contactsUpserted: number
+  conversationsLinked: number
+  notes: string[]
+}
+
+export const listCustomers = () => api<CustomerSummary[]>('/customers')
+
+export const getCustomer = (customerId: string) =>
+  api<CustomerDetail>(`/customers/${customerId}`)
+
+export const getCustomerOverview = (customerId: string, refresh = false) =>
+  api<CustomerCompanyOverview>(
+    `/customers/${customerId}/overview${refresh ? '?refresh=true' : ''}`,
+  )
+
+export const createCustomer = (name: string) =>
+  api<CustomerSummary>('/customers', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+
+export const reconcileCustomers = () =>
+  api<CustomerReconcileResult>('/customers/reconcile', { method: 'POST' })
+
+export const warmCustomers = () =>
+  api<{ customersUpdated: number }>('/customers/warm', { method: 'POST' })
+
+export type CalendarEvent = {
+  id: string
+  subject: string | null
+  organizer: string | null
+  start: string | null
+  end: string | null
+  location: string | null
+  isAllDay: boolean
+  webLink: string | null
+}
+
+export type TeamsChat = {
+  id: string
+  topic: string | null
+  chatType: string
+  lastUpdated: string | null
+  lastPreview: string | null
+  webUrl: string | null
+}
+
+export const listCalendarEvents = (connectedAccountId: string, top = 25) =>
+  api<CalendarEvent[]>(`/connected-accounts/${connectedAccountId}/calendar?top=${top}`)
+
+export const listTeamsChats = (connectedAccountId: string, top = 20) =>
+  api<TeamsChat[]>(`/connected-accounts/${connectedAccountId}/teams/chats?top=${top}`)
+
 export type ConnectedAccount = {
   id: string
   userId: string
@@ -304,6 +480,7 @@ export type ConnectedAccount = {
   grantedScopesJson: string | null
   lastSuccessfulSyncAt: string | null
   updatedAt: string
+  mailboxKind?: string
 }
 
 export type OutlookMessage = {
@@ -315,10 +492,13 @@ export type OutlookMessage = {
   isRead: boolean
 }
 
-export const beginMicrosoftAuthorize = () =>
+export const beginMicrosoftAuthorize = (mailboxKind: 'Work' | 'Personal' = 'Work') =>
   api<{ authorizationUrl: string; state: string }>(
     '/connected-accounts/microsoft/authorize',
-    { method: 'POST' },
+    {
+      method: 'POST',
+      body: JSON.stringify({ mailboxKind }),
+    },
   )
 
 export const listConnectedAccounts = () =>
@@ -326,6 +506,15 @@ export const listConnectedAccounts = () =>
 
 export const disconnectAccount = (connectedAccountId: string) =>
   api<void>(`/connected-accounts/${connectedAccountId}`, { method: 'DELETE' })
+
+export const updateMailboxKind = (
+  connectedAccountId: string,
+  mailboxKind: 'Work' | 'Personal',
+) =>
+  api<ConnectedAccount>(`/connected-accounts/${connectedAccountId}/mailbox-kind`, {
+    method: 'PATCH',
+    body: JSON.stringify({ mailboxKind }),
+  })
 
 export const listOutlookMail = (connectedAccountId: string, top = 15) =>
   api<OutlookMessage[]>(`/connected-accounts/${connectedAccountId}/mail?top=${top}`)
@@ -385,7 +574,6 @@ export const createReplyForApproval = (conversationId: string, body: string) =>
 export type ConversationSummaryResult = {
   conversationId: string
   summary: string
-  internalNoteMessageId: string | null
 }
 
 export const summarizeConversation = (conversationId: string) =>
@@ -662,7 +850,8 @@ export const getAiStatus = () => api<AiStatus>('/ai/status')
 
 export const getOpsHealth = () => api<ConnectorHealth[]>('/ops/health')
 
-export const getOpsOpenWork = () => api<ExternalWorkItem[]>('/ops/open-work')
+export const getOpsOpenWork = (live = false) =>
+  api<ExternalWorkItem[]>(`/ops/open-work${live ? '?live=true' : ''}`)
 
 export type WhatsAppBridgeStatus = {
   enabled: boolean
@@ -679,6 +868,7 @@ export type WhatsAppOpsMatch = {
   externalId: string
   title: string
   matchMethod: string
+  url?: string | null
 }
 
 export type WhatsAppGap = {
@@ -691,9 +881,44 @@ export type WhatsAppGap = {
   matches: WhatsAppOpsMatch[]
 }
 
+export type WhatsAppOpsCandidate = {
+  externalId: string
+  title: string
+  url?: string | null
+  matchMethod: string
+  score: number
+  confidence: string
+}
+
+export type WhatsAppOpsConnectorPill = {
+  sourceSystem: string
+  /** Matched | Possible | NoMatch */
+  status: string
+  label: string
+  url?: string | null
+  candidates: WhatsAppOpsCandidate[]
+}
+
+export type WhatsAppMessageOps = {
+  messageId: string
+  extractedHints: string[]
+  connectors: WhatsAppOpsConnectorPill[]
+}
+
+export type WhatsAppConversationOps = {
+  conversationId: string
+  messages: WhatsAppMessageOps[]
+}
+
 export const getWhatsAppStatus = () => api<WhatsAppBridgeStatus>('/whatsapp/status')
 
 export const getWhatsAppGaps = () => api<WhatsAppGap[]>('/whatsapp/gaps')
+
+export const analyzeWhatsAppConversation = (conversationId: string) =>
+  api<WhatsAppConversationOps>(`/whatsapp/conversations/${conversationId}/ops-matches`)
+
+export const refreshWhatsAppTitles = () =>
+  api<{ updated: number }>('/whatsapp/refresh-titles', { method: 'POST' })
 
 export const proposeOpsWriteBack = (input: {
   sourceSystem: string

@@ -22,6 +22,7 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
+    public DbSet<MessageAttachment> MessageAttachments => Set<MessageAttachment>();
     public DbSet<Draft> Drafts => Set<Draft>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<WorkflowAction> WorkflowActions => Set<WorkflowAction>();
@@ -38,8 +39,11 @@ public sealed class PalantirDbContext : DbContext, IPalantirDbContext
 
     IQueryable<Organization> IPalantirDbContext.Organizations => Organizations;
     IQueryable<User> IPalantirDbContext.Users => Users;
+    IQueryable<Customer> IPalantirDbContext.Customers => Customers;
+    IQueryable<Contact> IPalantirDbContext.Contacts => Contacts;
     IQueryable<Conversation> IPalantirDbContext.Conversations => Conversations;
     IQueryable<Message> IPalantirDbContext.Messages => Messages;
+    IQueryable<MessageAttachment> IPalantirDbContext.MessageAttachments => MessageAttachments;
     IQueryable<Draft> IPalantirDbContext.Drafts => Drafts;
     IQueryable<ApprovalRequest> IPalantirDbContext.ApprovalRequests => ApprovalRequests;
     IQueryable<AuditEvent> IPalantirDbContext.AuditEvents => AuditEvents;

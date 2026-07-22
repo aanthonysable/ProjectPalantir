@@ -11,6 +11,8 @@ public class ConnectedAccount
     public string ProviderAccountId { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
     public string? PrimaryAddress { get; set; }
+    /// <summary>Work or Personal — how this mailbox is treated in the assistant.</summary>
+    public string MailboxKind { get; set; } = "Work";
     public ConnectionStatus ConnectionStatus { get; set; } = ConnectionStatus.NotConnected;
     public string? GrantedScopesJson { get; set; }
     public DateTimeOffset? LastSuccessfulSyncAt { get; set; }

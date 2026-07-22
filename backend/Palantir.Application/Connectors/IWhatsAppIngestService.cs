@@ -10,6 +10,9 @@ public interface IWhatsAppIngestService
 
     /// <summary>Remove duplicate WhatsApp messages (same provider id or same body/time).</summary>
     Task<int> DedupeStoredMessagesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Pull friendly group subjects from WAHA and upgrade placeholder conversation titles.</summary>
+    Task<int> RefreshChatTitlesAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed record WhatsAppBridgeStatusDto(

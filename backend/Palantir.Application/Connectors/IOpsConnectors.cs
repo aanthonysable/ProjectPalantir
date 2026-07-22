@@ -71,7 +71,7 @@ public sealed record InventoryAlertDto(
     string? Area,
     string? PartTypes);
 
-/// <summary>EZRentOut rental order (basket) used for historical revenue rollups.</summary>
+/// <summary>EZRentOut rental order (basket / job) used for CRM activity and revenue rollups.</summary>
 public sealed record EzRentOrderDto(
     string OrderId,
     string Customer,
@@ -81,7 +81,11 @@ public sealed record EzRentOrderDto(
     DateTimeOffset? BillFrom,
     DateTimeOffset? BillTo,
     DateTimeOffset? CheckedOutOn,
-    DateTimeOffset? CompletedOn);
+    DateTimeOffset? CompletedOn,
+    int AssetCount = 0,
+    string? JobLabel = null,
+    string? AssetSummary = null,
+    IReadOnlyList<string>? AssetNames = null);
 
 public interface IEZRentOutConnector
 {

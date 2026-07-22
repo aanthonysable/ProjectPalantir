@@ -51,6 +51,7 @@ public sealed class ConnectedAccountConfiguration : IEntityTypeConfiguration<Con
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Provider).HasMaxLength(64).IsRequired();
         builder.Property(x => x.ProviderAccountId).HasMaxLength(256).IsRequired();
+        builder.Property(x => x.MailboxKind).HasMaxLength(32).IsRequired();
         builder.Property(x => x.ConnectionStatus).HasConversion<string>().HasMaxLength(64);
         builder.HasOne(x => x.User).WithMany(x => x.ConnectedAccounts).HasForeignKey(x => x.UserId);
     }
@@ -62,7 +63,8 @@ public sealed class OAuthGrantConfiguration : IEntityTypeConfiguration<OAuthGran
     {
         builder.ToTable("OAuthGrants");
         builder.HasKey(x => x.Id);
-        builder.Property(x => x.CredentialReference).HasMaxLength(512).IsRequired();
+        // Protected access/refresh token JSON routinely exceeds 512 chars.
+        builder.Property(x => x.CredentialReference).HasColumnType("nvarchar(max)").IsRequired();
         builder.HasOne(x => x.ConnectedAccount).WithMany(x => x.OAuthGrants).HasForeignKey(x => x.ConnectedAccountId);
     }
 }
@@ -131,9 +133,11 @@ public sealed class ConversationConfiguration : IEntityTypeConfiguration<Convers
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Subject).HasMaxLength(500);
         builder.Property(x => x.Channel).HasMaxLength(50).IsRequired();
+        builder.Property(x => x.SourceMailboxKind).HasMaxLength(32);
         builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(50);
         builder.HasOne(x => x.AssignedUser).WithMany().HasForeignKey(x => x.AssignedUserId).OnDelete(DeleteBehavior.NoAction);
         builder.HasOne(x => x.AssignedTeam).WithMany().HasForeignKey(x => x.AssignedTeamId).OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne(x => x.SourceConnectedAccount).WithMany().HasForeignKey(x => x.SourceConnectedAccountId).OnDelete(DeleteBehavior.NoAction);
     }
 }
 
@@ -146,6 +150,22 @@ public sealed class MessageConfiguration : IEntityTypeConfiguration<Message>
         builder.Property(x => x.Direction).HasMaxLength(20).IsRequired();
         builder.Property(x => x.ProviderMessageId).HasMaxLength(300);
         builder.HasOne(x => x.Conversation).WithMany(x => x.Messages).HasForeignKey(x => x.ConversationId);
+    }
+}
+
+public sealed class MessageAttachmentConfiguration : IEntityTypeConfiguration<MessageAttachment>
+{
+    public void Configure(EntityTypeBuilder<MessageAttachment> builder)
+    {
+        builder.ToTable("MessageAttachments");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.FileName).HasMaxLength(260).IsRequired();
+        builder.Property(x => x.ContentType).HasMaxLength(200).IsRequired();
+        builder.Property(x => x.ProviderAttachmentId).HasMaxLength(300);
+        builder.Property(x => x.BlobPath).HasMaxLength(500);
+        builder.HasIndex(x => new { x.MessageId, x.ProviderAttachmentId });
+        builder.HasOne(x => x.Message).WithMany(x => x.Attachments).HasForeignKey(x => x.MessageId);
+        builder.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrganizationId);
     }
 }
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Palantir.Application.Customers;
 using Palantir.Application.Overview;
 using Palantir.Infrastructure.Persistence;
 
@@ -171,6 +172,27 @@ public sealed class OpsSnapshotRefreshBackgroundService : BackgroundService
                 snapshot.Counts.ExternalOpenWork,
                 snapshot.QuotesSample.Count,
                 snapshot.EzRentOrders.Count);
+
+            // Persist customer CRM activity into SQL for all users (shared cache).
+            try
+            {
+                var customers = scope.ServiceProvider.GetRequiredService<ICustomerService>();
+                var warmed = await customers.WarmFromSnapshotAsync(organizationId, cancellationToken);
+                if (warmed > 0)
+                {
+                    _logger.LogInformation(
+                        "Persisted CRM activity for {Count} customer(s) in org {OrganizationId}",
+                        warmed,
+                        organizationId);
+                }
+            }
+            catch (Exception warmEx)
+            {
+                _logger.LogWarning(
+                    warmEx,
+                    "Customer CRM warm from snapshot failed for org {OrganizationId}",
+                    organizationId);
+            }
         }
         catch (Exception ex)
         {

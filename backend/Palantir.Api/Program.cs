@@ -66,6 +66,11 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddPalantirApplication();
 builder.Services.AddPalantirInfrastructure(builder.Configuration);
+builder.Services.Configure<HostOptions>(options =>
+{
+    // Keep Kestrel up if a background worker throws unexpectedly.
+    options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+});
 
 var pilotJwt = builder.Configuration.GetSection(PilotJwtOptions.SectionName).Get<PilotJwtOptions>()
     ?? new PilotJwtOptions();

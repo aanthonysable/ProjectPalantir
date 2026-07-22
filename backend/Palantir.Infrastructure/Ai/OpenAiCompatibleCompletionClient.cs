@@ -57,6 +57,7 @@ public sealed class OpenAiCompatibleCompletionClient : IAiCompletionClient
                 AiTaskKind.Summarize,
                 AiTaskKind.DraftReply,
                 AiTaskKind.DescribeImage,
+                AiTaskKind.FollowUp,
             }
             .Select(task =>
             {

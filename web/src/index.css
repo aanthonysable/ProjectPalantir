@@ -32,6 +32,14 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 html,
@@ -49,26 +57,6 @@ body {
   overflow: hidden;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
-}
-
-/* Keep scroll working, hide the chrome scrollbar on app surfaces */
-.stage-scroll,
-.rail,
-.ask-thread,
-.overview-chat-thread,
-.login-shell {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.stage-scroll::-webkit-scrollbar,
-.rail::-webkit-scrollbar,
-.ask-thread::-webkit-scrollbar,
-.overview-chat-thread::-webkit-scrollbar,
-.login-shell::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
 }
 
 button,

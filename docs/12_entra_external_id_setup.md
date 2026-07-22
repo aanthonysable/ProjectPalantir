@@ -1,8 +1,10 @@
 # Entra External ID setup (Palantir pilot login)
 
-Palantir keeps **local password login** working. When Entra External ID is configured, the web app also shows **Sign in with Microsoft**, which exchanges an Entra token for the normal Palantir JWT.
+**Primary login** for users is **Sign in with Microsoft** (DNOW work email via Entra External ID).
+**Local password login** stays enabled as a developer backdoor only (collapsed on the login screen)
+in case Microsoft sign-in is unavailable during development.
 
-This is **Palantir login**, not Outlook mail. Work mailbox Graph access still needs corporate IT approval separately.
+This is **Palantir login**, not mailbox connect. Work/personal email sync is configured separately under Admin.
 
 ## Azure steps (you / cloud admin)
 

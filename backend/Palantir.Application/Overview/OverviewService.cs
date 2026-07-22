@@ -580,7 +580,7 @@ public sealed class OverviewService : IOverviewService
                     - ON_HOLD = physical work is effectively finished; back office can close whenever. Do NOT treat ON_HOLD as a blocker or backlog to chase unless the reader explicitly asks.
                     - DONE = closed.
 
-                    Structure (use these headings; omit a section only if that data is absent):
+                    Structure (use these plain section labels on their own line; NEVER use markdown # headings):
                     1) Executive snapshot — 3–6 sentences on physical work needing attention now
                     2) Who is working what — by person; OPEN / IN_PROGRESS; unassigned and stuck physical work
                     3) Area view — Northern, Permian, Shop (TEST & PREP / shop-style titles) for physical work
@@ -588,6 +588,10 @@ public sealed class OverviewService : IOverviewService
                     5) Quotes — aging Sent/Draft; call out quotes linked to physical MX work; ON_HOLD links are FYI only
                     6) Inventory — outs and lows that risk active jobs; group by org; name the worst parts
                     7) Watch list — 3–5 concrete asks with owners when known (physical work / quotes / parts — not ON_HOLD cleanup)
+
+                    Formatting:
+                    - Prefer short paragraphs and "- " bullets under each label.
+                    - Do not use #, ##, ###, or markdown horizontal rules.
 
                     Fact rules:
                     - Use ONLY the FACT SHEET and KNOWLEDGE EXCERPTS. Do not invent people, tickets, quotes, comments, or quantities.
@@ -610,6 +614,13 @@ public sealed class OverviewService : IOverviewService
                     """)
             ],
             cancellationToken)).Trim();
+
+        // Soft-strip any leftover markdown heading markers from the model.
+        narrative = System.Text.RegularExpressions.Regex.Replace(
+            narrative,
+            @"^\s*#{1,6}\s+",
+            string.Empty,
+            System.Text.RegularExpressions.RegexOptions.Multiline);
 
 
         await _audit.WriteAsync(

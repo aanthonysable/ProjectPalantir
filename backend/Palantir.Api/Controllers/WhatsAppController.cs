@@ -32,6 +32,24 @@ public sealed class WhatsAppController : ControllerBase
         return Ok(gaps);
     }
 
+    /// <summary>Per-message ops cross-ref for a WhatsApp conversation (MaintainX / Monday / EZRentOut).</summary>
+    [HttpGet("conversations/{conversationId:guid}/ops-matches")]
+    public async Task<ActionResult<WhatsAppConversationOpsDto>> AnalyzeConversation(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _watch.AnalyzeConversationAsync(conversationId, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    /// <summary>Upgrade placeholder WhatsApp titles using WAHA group subjects.</summary>
+    [HttpPost("refresh-titles")]
+    public async Task<ActionResult<object>> RefreshTitles(CancellationToken cancellationToken)
+    {
+        var updated = await _ingest.RefreshChatTitlesAsync(cancellationToken);
+        return Ok(new { updated });
+    }
+
     /// <summary>One-shot cleanup of duplicate WhatsApp inbox rows.</summary>
     [HttpPost("dedupe")]
     public async Task<ActionResult<object>> Dedupe(CancellationToken cancellationToken)

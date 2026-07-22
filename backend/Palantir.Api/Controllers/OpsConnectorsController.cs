@@ -5,6 +5,7 @@ using Palantir.Api.Auth;
 using Palantir.Application.Connectors;
 using Palantir.Application.Ops;
 using Palantir.Application.Outbound;
+using Palantir.Application.Overview;
 
 namespace Palantir.Api.Controllers;
 
@@ -21,6 +22,7 @@ public sealed class OpsConnectorsController : ControllerBase
     private readonly IAccountingConnector _accounting;
     private readonly IOpsWriteBackService _writeBack;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IOpsSnapshotStore _opsSnapshots;
 
     public OpsConnectorsController(
         IOpsConnectorHealthService health,
@@ -30,7 +32,8 @@ public sealed class OpsConnectorsController : ControllerBase
         IOptions<MaintainXOptions> maintainXOptions,
         IAccountingConnector accounting,
         IOpsWriteBackService writeBack,
-        ICurrentUserAccessor currentUser)
+        ICurrentUserAccessor currentUser,
+        IOpsSnapshotStore opsSnapshots)
     {
         _health = health;
         _maintainX = maintainX;
@@ -40,6 +43,7 @@ public sealed class OpsConnectorsController : ControllerBase
         _accounting = accounting;
         _writeBack = writeBack;
         _currentUser = currentUser;
+        _opsSnapshots = opsSnapshots;
     }
 
     [HttpGet("health")]
@@ -52,8 +56,35 @@ public sealed class OpsConnectorsController : ControllerBase
 
     [HttpGet("open-work")]
     public async Task<ActionResult<IReadOnlyList<ExternalWorkItemDto>>> OpenWork(
-        CancellationToken cancellationToken)
+        [FromQuery] bool live = false,
+        CancellationToken cancellationToken = default)
     {
+        // Prefer the shared DB ops snapshot (fast). Use ?live=true to force connector pulls.
+        if (!live && _currentUser.OrganizationId is Guid orgId)
+        {
+            var cached = await _opsSnapshots.TryGetFreshAsync(
+                             orgId,
+                             IOpsSnapshotStore.DefaultFocusKey,
+                             cancellationToken)
+                         ?? await _opsSnapshots.TryGetLatestReadyAsync(
+                             orgId,
+                             IOpsSnapshotStore.DefaultFocusKey,
+                             cancellationToken);
+
+            if (cached is not null)
+            {
+                var fromCache = cached.ExternalWorkSample
+                    .Concat(cached.QuotesSample)
+                    .GroupBy(i => $"{i.SourceSystem}:{i.ExternalId}")
+                    .Select(g => g.First())
+                    .ToList();
+                if (fromCache.Count > 0)
+                {
+                    return Ok(fromCache);
+                }
+            }
+        }
+
         var items = new List<ExternalWorkItemDto>();
 
         foreach (var env in _maintainXOptions.Environments.Where(e => !string.IsNullOrWhiteSpace(e.ApiKey)))

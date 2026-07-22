@@ -9,6 +9,15 @@ public interface IOpsSnapshotStore
         string focusKey,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the latest Ready snapshot even if its TTL has expired.
+    /// Useful for fast UI paths that can tolerate slightly stale ops data.
+    /// </summary>
+    Task<OverviewSnapshotDto?> TryGetLatestReadyAsync(
+        Guid organizationId,
+        string focusKey,
+        CancellationToken cancellationToken = default);
+
     Task UpsertReadyAsync(
         Guid organizationId,
         string focusKey,

@@ -52,6 +52,7 @@ public sealed class AiAssistantService : IAiAssistantService
                     Rules:
                     - Use the FULL message bodies in the transcript (not just previews).
                     - Be concise (3-6 short bullets or a short paragraph).
+                    - Use plain "- " bullets. Do NOT use markdown headings (#, ##, ###).
                     - Call out open questions, urgency, and suggested next action.
                     - Do not invent facts that are not in the transcript.
                     - Do not send or claim that anything was sent.
@@ -68,36 +69,23 @@ public sealed class AiAssistantService : IAiAssistantService
             ],
             cancellationToken)).Trim();
 
-        var note = new Message
-        {
-            ConversationId = conversationId,
-            Direction = "Internal",
-            SenderUserId = userId,
-            Body = summary,
-            Summary = "AI summary",
-            IsInternalNote = true,
-            ProviderMetadataJson = JsonSerializer.Serialize(new
-            {
-                kind = "ai.summary",
-                model = "configured"
-            }),
-            CreatedAt = DateTimeOffset.UtcNow
-        };
+        summary = SanitizeAiProse(summary);
 
-        conversation.UpdatedAt = DateTimeOffset.UtcNow;
-        _db.Add(note);
+        // Summaries are ephemeral (returned to the client only). Remove any legacy
+        // persisted "AI summary" notes so threads never accumulate multiples.
+        RemovePersistedAiSummaries(conversationId);
         await _db.SaveChangesAsync(cancellationToken);
 
         await _audit.WriteAsync(
             organizationId,
-            "ai.summary_created",
+            "ai.summary_generated",
             userId,
-            nameof(Message),
-            note.Id,
-            JsonSerializer.Serialize(new { conversationId }),
+            nameof(Conversation),
+            conversationId,
+            JsonSerializer.Serialize(new { conversationId, ephemeral = true }),
             cancellationToken);
 
-        return new ConversationSummaryResult(conversationId, summary, note.Id);
+        return new ConversationSummaryResult(conversationId, summary);
     }
 
     public async Task<ReplyDraftResult> DraftReplyForApprovalAsync(
@@ -113,17 +101,38 @@ public sealed class AiAssistantService : IAiAssistantService
         await EnsureFullEmailBodiesAsync(conversation, userId, cancellationToken);
         var transcript = BuildTranscript(conversationId, includePriorAiSummaries: false);
 
+        var user = _db.Users.FirstOrDefault(u => u.Id == userId);
+        var mailbox = _db.ConnectedAccounts
+            .Where(a => a.UserId == userId &&
+                        a.Provider == "MicrosoftGraph" &&
+                        a.ConnectionStatus == Domain.Enums.ConnectionStatus.Connected)
+            .ToList()
+            .OrderByDescending(a => connectedAccountId.HasValue && a.Id == connectedAccountId.Value)
+            .ThenByDescending(a => a.UpdatedAt)
+            .FirstOrDefault();
+
+        var authorName = !string.IsNullOrWhiteSpace(mailbox?.DisplayName)
+            ? mailbox!.DisplayName!
+            : user?.DisplayName ?? "the employee";
+        var authorEmail = !string.IsNullOrWhiteSpace(mailbox?.PrimaryAddress)
+            ? mailbox!.PrimaryAddress!
+            : user?.Email ?? "(unknown mailbox)";
+
         var draftBody = (await _ai.CompleteAsync(
             AiTaskKind.DraftReply,
             [
                 new AiChatMessage(
                     "system",
-                    """
+                    $"""
                     You are Palantir, an AI assistant for Sable Automation Solutions.
-                    Draft a professional email reply the employee can review before sending.
+                    Draft a professional email reply that {authorName} <{authorEmail}> will send from their mailbox.
                     Rules:
+                    - Write ONLY in the voice of {authorName} ({authorEmail}). First person as that person.
+                    - Never write as the original From: sender, a To: recipient, a Cc: party, or any third party.
+                    - If {authorEmail} was only Cc'd (not the primary To), still reply as {authorName} — do not impersonate the primary recipient.
+                    - Do not invent that you are someone else named in the thread.
                     - Use the FULL message bodies in the transcript (not just previews).
-                    - Output ONLY the email body text (no subject line, no markdown fences).
+                    - Output ONLY the email body text (no subject line, no markdown fences, no "From:" header).
                     - Be concise, courteous, and specific to the transcript.
                     - Do not invent commitments, pricing, or technical claims.
                     - If information is missing, ask a clear clarifying question.
@@ -134,6 +143,7 @@ public sealed class AiAssistantService : IAiAssistantService
                     $"""
                     Channel: {conversation.Channel}
                     Subject: {conversation.Subject ?? "(none)"}
+                    Author mailbox (always write as this person): {authorName} <{authorEmail}>
                     Extra guidance from user: {(string.IsNullOrWhiteSpace(guidance) ? "(none)" : guidance)}
 
                     Transcript:
@@ -248,7 +258,7 @@ public sealed class AiAssistantService : IAiAssistantService
             .ToList()
             .OrderBy(m => m.CreatedAt)
             .TakeLast(50)
-            .Where(m => includePriorAiSummaries || m.Summary != "AI summary")
+            .Where(m => includePriorAiSummaries || !IsPersistedAiSummary(m))
             .ToList();
 
         if (messages.Count == 0)
@@ -262,12 +272,54 @@ public sealed class AiAssistantService : IAiAssistantService
             var label = message.IsInternalNote
                 ? "InternalNote"
                 : message.Direction;
+            var from = TryReadWhatsAppSender(message.ProviderMetadataJson);
+            if (!string.IsNullOrWhiteSpace(from))
+            {
+                label = $"{label} ({from})";
+            }
+
             sb.AppendLine($"[{message.CreatedAt:u}] {label}:");
             sb.AppendLine(message.Body ?? "(empty)");
             sb.AppendLine();
         }
 
         return sb.ToString().Trim();
+    }
+
+    private static string? TryReadWhatsAppSender(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            if (!doc.RootElement.TryGetProperty("provider", out var provider) ||
+                !string.Equals(provider.GetString(), "WAHA", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            if (doc.RootElement.TryGetProperty("fromMe", out var fromMe) &&
+                fromMe.ValueKind == JsonValueKind.True)
+            {
+                return "You";
+            }
+
+            if (doc.RootElement.TryGetProperty("notifyName", out var name) &&
+                name.GetString() is { Length: > 0 } display)
+            {
+                return display;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
     }
 
     private static Guid? TryReadConnectedAccountId(string? metadataJson)
@@ -294,6 +346,44 @@ public sealed class AiAssistantService : IAiAssistantService
         return null;
     }
 
+    private void RemovePersistedAiSummaries(Guid conversationId)
+    {
+        var stale = _db.Messages
+            .Where(m => m.ConversationId == conversationId)
+            .ToList()
+            .Where(IsPersistedAiSummary)
+            .ToList();
+
+        foreach (var message in stale)
+        {
+            _db.Remove(message);
+        }
+    }
+
+    private static bool IsPersistedAiSummary(Message message)
+    {
+        if (string.Equals(message.Summary, "AI summary", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(message.ProviderMetadataJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(message.ProviderMetadataJson);
+            return doc.RootElement.TryGetProperty("kind", out var kind) &&
+                   string.Equals(kind.GetString(), "ai.summary", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string StripFence(string text)
     {
         var lines = text.Split('\n');
@@ -306,6 +396,31 @@ public sealed class AiAssistantService : IAiAssistantService
         {
             lines = lines.Take(lines.Length - 1).ToArray();
         }
+
+        return string.Join('\n', lines).Trim();
+    }
+
+    private static string SanitizeAiProse(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        var lines = text.Replace("\r\n", "\n").Split('\n')
+            .Select(line =>
+            {
+                var trimmed = line.TrimEnd();
+                var heading = System.Text.RegularExpressions.Regex.Match(
+                    trimmed,
+                    @"^\s*#{1,6}\s+(?<title>.+?)\s*$");
+                if (heading.Success)
+                {
+                    return heading.Groups["title"].Value.Trim();
+                }
+
+                return trimmed;
+            });
 
         return string.Join('\n', lines).Trim();
     }

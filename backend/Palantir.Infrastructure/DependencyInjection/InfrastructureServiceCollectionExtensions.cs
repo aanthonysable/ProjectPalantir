@@ -9,11 +9,13 @@ using Palantir.Application.Auth;
 using Palantir.Application.Ask;
 using Palantir.Application.Azure;
 using Palantir.Application.Connectors;
+using Palantir.Application.FollowUps;
 using Palantir.Application.Knowledge;
 using Palantir.Application.Overview;
 using Palantir.Infrastructure.Ai;
 using Palantir.Infrastructure.Ask;
 using Palantir.Infrastructure.Connectors;
+using Palantir.Infrastructure.FollowUps;
 using Palantir.Infrastructure.Knowledge;
 using Palantir.Infrastructure.Overview;
 using Palantir.Infrastructure.Persistence;
@@ -45,6 +47,8 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.Configure<MicrosoftGraphOptions>(
             configuration.GetSection(MicrosoftGraphOptions.SectionName));
+        services.Configure<OutlookAutoSyncOptions>(
+            configuration.GetSection(OutlookAutoSyncOptions.SectionName));
         services.Configure<MaintainXOptions>(
             configuration.GetSection(MaintainXOptions.SectionName));
         services.Configure<EZRentOutOptions>(
@@ -55,6 +59,7 @@ public static class InfrastructureServiceCollectionExtensions
             configuration.GetSection(WhatsAppBridgeOptions.SectionName));
         services.Configure<AiOptions>(configuration.GetSection(AiOptions.SectionName));
         services.Configure<OpsSnapshotOptions>(configuration.GetSection(OpsSnapshotOptions.SectionName));
+        services.Configure<FollowUpScanOptions>(configuration.GetSection(FollowUpScanOptions.SectionName));
         services.Configure<PilotJwtOptions>(configuration.GetSection(PilotJwtOptions.SectionName));
         services.Configure<AzureOptions>(configuration.GetSection(AzureOptions.SectionName));
 
@@ -75,6 +80,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IPalantirDbContext>(sp => sp.GetRequiredService<PalantirDbContext>());
         services.AddScoped<IAuditEventWriter, AuditEventWriter>();
         services.AddSingleton<IConnectorCredentialStore, DataProtectionCredentialStore>();
+        services.AddHttpClient("waha", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(20);
+        });
+        services.AddSingleton<IWahaDirectoryClient, WahaDirectoryClient>();
         services.AddScoped<IMicrosoftGraphConnectorService, MicrosoftGraphConnectorService>();
         services.AddScoped<IMaintainXConnector, MaintainXConnector>();
         services.AddScoped<IEZRentOutConnector, EZRentOutConnector>();
@@ -98,6 +108,8 @@ public static class InfrastructureServiceCollectionExtensions
             sp.GetRequiredService<AskAttachmentExtractQueue>());
         services.AddHostedService<AskAttachmentExtractBackgroundService>();
         services.AddHostedService<OpsSnapshotRefreshBackgroundService>();
+        services.AddHostedService<OutlookInboxAutoSyncBackgroundService>();
+        services.AddHostedService<FollowUpScanBackgroundService>();
 
         return services;
     }

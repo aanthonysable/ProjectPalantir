@@ -17,4 +17,5 @@ public class Message
     public Conversation? Conversation { get; set; }
     public User? SenderUser { get; set; }
     public Contact? Contact { get; set; }
+    public ICollection<MessageAttachment> Attachments { get; set; } = new List<MessageAttachment>();
 }

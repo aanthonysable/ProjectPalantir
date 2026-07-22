@@ -16,7 +16,7 @@ Then update Running total (closed sessions only).
 
 Running total
 -------------
-13.7 hours (closed sessions through 2026-07-20)
+17.6 hours (closed sessions through 2026-07-22)
 
 Open session
 ------------
@@ -27,4 +27,4 @@ Entries
 2026-07-16 | 3.5 | Day 1 foundation through Phase 2–4 pilot: API/web scaffold, Outlook Graph connect/sync/send, approvals, Ollama AI, pilot + Entra External ID login, full message bodies, thread sort. Session ~11:30–16:20 minus inactive break ~13:00–14:30.
 2026-07-17 | 4.0 | Full day: ops connectors (MaintainX×2 / EZRentOut / Monday), Admin health + Open work, theme/Gemini AI, Ask + knowledge (PDF, 4GB uploads, progress, background indexing), floating toasts, DEPENDENCIES/check-deps, resume todos. Session ~10:45–15:35 minus ~0.8h interruptions.
 2026-07-20 | 6.2 | Full day (AM 2.2 + PM 4.0, ~08:30–10:40 and 12:15–16:16). Morning: Ask + EZRentOut rollups (incl. historical YTD/MTD), Ask UX (toasts, auto-scroll, thinking anim), first-pass mobile web, Monday billed/converted quotes + customer-match, shared DB OpsSnapshots. Afternoon: Save-to-knowledge in-app modal; Ask attachments + background extract; knowledge browse tab/library (collections, duplicate hash scan); mobile shell (hamburger drawer, inbox list-or-thread); WhatsApp bridge pilot (WAHA → Inbox + Admin ops gaps).
-
+2026-07-22 | 3.9 | Afternoon session ~12:00–15:55. Customers CRM 360: activity folders, job-first order titles + per-asset expand/chevrons, richer company web research for AI overviews, clear/loading reading pane on customer switch; CRM activity persistence/warm from ops snapshot; follow-ups, WhatsApp/Outlook sync, and related ops UI hardening shipped in the same commit.

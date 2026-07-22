@@ -8,6 +8,8 @@ using Palantir.Application.Outbound;
 using Palantir.Application.Overview;
 using Palantir.Application.Tasks;
 using Palantir.Application.Connectors;
+using Palantir.Application.FollowUps;
+using Palantir.Application.Customers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Palantir.Application.DependencyInjection;
@@ -30,6 +32,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAskAttachmentService, AskAttachmentService>();
         services.AddScoped<IKnowledgeService, KnowledgeService>();
         services.AddScoped<IKnowledgeCaptureService, KnowledgeCaptureService>();
+        services.AddScoped<IFollowUpScanService, FollowUpScanService>();
+        services.AddScoped<ICustomerService, CustomerService>();
         return services;
     }
 }

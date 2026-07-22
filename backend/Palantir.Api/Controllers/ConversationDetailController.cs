@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Palantir.Api.Auth;
 using Palantir.Api.Hubs;
+using Palantir.Application.Abstractions;
 using Palantir.Application.Ai;
 using Palantir.Application.Conversations;
 using Palantir.Application.Outbound;
@@ -16,6 +17,8 @@ public sealed class ConversationDetailController : ControllerBase
     private readonly IOutboundEmailService _outbound;
     private readonly IAiAssistantService _ai;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IPalantirDbContext _db;
+    private readonly IBlobKnowledgeStore _blobs;
     private readonly IHubContext<NotificationsHub> _hub;
 
     public ConversationDetailController(
@@ -23,12 +26,16 @@ public sealed class ConversationDetailController : ControllerBase
         IOutboundEmailService outbound,
         IAiAssistantService ai,
         ICurrentUserAccessor currentUser,
+        IPalantirDbContext db,
+        IBlobKnowledgeStore blobs,
         IHubContext<NotificationsHub> hub)
     {
         _conversations = conversations;
         _outbound = outbound;
         _ai = ai;
         _currentUser = currentUser;
+        _db = db;
+        _blobs = blobs;
         _hub = hub;
     }
 
@@ -46,6 +53,22 @@ public sealed class ConversationDetailController : ControllerBase
     {
         var messages = await _conversations.ListMessagesAsync(conversationId, cancellationToken);
         return Ok(messages);
+    }
+
+    [HttpPost("read")]
+    public async Task<ActionResult<ConversationDto>> MarkRead(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var conversation = await _conversations.MarkReadAsync(conversationId, cancellationToken);
+            return Ok(conversation);
+        }
+        catch (InvalidOperationException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("messages")]
@@ -71,6 +94,55 @@ public sealed class ConversationDetailController : ControllerBase
         }
 
         return Created($"/conversations/{conversationId}/messages/{message.Id}", message);
+    }
+
+    [HttpGet("messages/{messageId:guid}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> DownloadAttachment(
+        Guid conversationId,
+        Guid messageId,
+        Guid attachmentId,
+        CancellationToken cancellationToken)
+    {
+        if (_currentUser.OrganizationId is null)
+        {
+            return BadRequest("X-Palantir-Organization-Id header is required.");
+        }
+
+        var message = _db.Messages.FirstOrDefault(m => m.Id == messageId && m.ConversationId == conversationId);
+        if (message is null)
+        {
+            return NotFound();
+        }
+
+        var conversation = _db.Conversations.FirstOrDefault(c => c.Id == conversationId);
+        if (conversation is null || conversation.OrganizationId != _currentUser.OrganizationId.Value)
+        {
+            return NotFound();
+        }
+
+        var attachment = _db.MessageAttachments.FirstOrDefault(a =>
+            a.Id == attachmentId &&
+            a.MessageId == messageId &&
+            a.OrganizationId == _currentUser.OrganizationId.Value);
+        if (attachment is null)
+        {
+            return NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(attachment.BlobPath) || !_blobs.IsConfigured)
+        {
+            return BadRequest(new { error = "Attachment content is not available for download." });
+        }
+
+        try
+        {
+            var stream = await _blobs.OpenReadAsync(attachment.BlobPath, cancellationToken);
+            return File(stream, attachment.ContentType, attachment.FileName);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPost("claim")]
@@ -170,13 +242,6 @@ public sealed class ConversationDetailController : ControllerBase
                 _currentUser.OrganizationId.Value,
                 _currentUser.UserId.Value,
                 cancellationToken);
-
-            await _hub.Clients.Group($"org:{_currentUser.OrganizationId}")
-                .SendAsync("conversation.message_added", new
-                {
-                    conversationId,
-                    messageId = result.InternalNoteMessageId
-                }, cancellationToken);
 
             return Ok(result);
         }

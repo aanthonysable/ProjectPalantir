@@ -4,12 +4,17 @@ import {
   ApiError,
   ApprovalItem,
   AuthProviders,
+  CalendarEvent,
   ConnectedAccount,
   Conversation,
+  CustomerDetail,
+  CustomerActivity,
+  CustomerSummary,
   Message,
   OutlookMessage,
   SessionUser,
   TaskItem,
+  TeamsChat,
   addMessage,
   approveRequest,
   beginMicrosoftAuthorize,
@@ -19,7 +24,16 @@ import {
   createConversation,
   createReplyForApproval,
   createTask,
+  createCustomer,
+  getCustomer,
+  getCustomerOverview,
+  listCalendarEvents,
+  listCustomers,
+  listTeamsChats,
+  reconcileCustomers,
+  warmCustomers,
   disconnectAccount,
+  updateMailboxKind,
   exchangeEntraToken,
   getAccessToken,
   getAuthProviders,
@@ -30,12 +44,14 @@ import {
   listConnectedAccounts,
   listConversations,
   listMessages,
+  downloadMessageAttachment,
   listOutlookMail,
   listTasks,
   login,
   logout,
   registerPilotUser,
   rejectRequest,
+  scanFollowUps,
   releaseConversation,
   draftReplyWithAi,
   summarizeConversation,
@@ -51,6 +67,8 @@ import {
   getOpsOpenWork,
   getWhatsAppStatus,
   getWhatsAppGaps,
+  analyzeWhatsAppConversation,
+  refreshWhatsAppTitles,
   proposeOpsWriteBack,
   getAiStatus,
   getKnowledgeStatus,
@@ -74,23 +92,98 @@ import {
   AskSessionSummary,
   WhatsAppBridgeStatus,
   WhatsAppGap,
+  WhatsAppConversationOps,
+  WhatsAppMessageOps,
 } from './api'
 import { signInWithEntra } from './entraAuth'
 import { BrandMark } from './BrandMark'
 import {
   DEFAULT_THEME,
+  PROFESSIONAL_THEME,
   THEME_PRESETS,
   ThemeColors,
+  ThemeMode,
   isHexColor,
   loadTheme,
   persistAndApplyTheme,
 } from './theme'
 import './App.css'
 
-const readyNavItems = ['Ask', 'Knowledge', 'Open work', 'Inbox', 'Tasks', 'Approvals', 'Admin'] as const
-const soonNavItems = ['Projects', 'Customers'] as const
+const readyNavItems = [
+  'Ask',
+  'Knowledge',
+  'Open work',
+  'Inbox',
+  'Customers',
+  'Tasks',
+  'Approvals',
+  'Admin',
+] as const
+const soonNavItems = ['Projects'] as const
 const navItems = [...readyNavItems, ...soonNavItems] as const
 type NavItem = (typeof navItems)[number]
+
+type InboxFolder =
+  | 'all'
+  | 'email-work'
+  | 'email-personal'
+  | 'whatsapp'
+  | 'internal'
+  | 'other'
+
+type InboxReadFilter = 'all' | 'unread' | 'read'
+
+const INBOX_FOLDERS: { id: InboxFolder; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'email-work', label: 'Work email' },
+  { id: 'email-personal', label: 'Personal email' },
+  { id: 'whatsapp', label: 'WhatsApp' },
+  { id: 'internal', label: 'Notes' },
+  { id: 'other', label: 'Other' },
+]
+
+const INBOX_READ_FILTERS: { id: InboxReadFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'unread', label: 'Unread' },
+  { id: 'read', label: 'Read' },
+]
+
+function conversationMatchesFolder(item: Conversation, folder: InboxFolder): boolean {
+  if (folder === 'all') return true
+  const channel = (item.channel || '').toLowerCase()
+  const kind = (item.sourceMailboxKind || 'Work').toLowerCase()
+  if (folder === 'email-work') {
+    return channel === 'email' && kind !== 'personal'
+  }
+  if (folder === 'email-personal') {
+    return channel === 'email' && kind === 'personal'
+  }
+  if (folder === 'whatsapp') return channel === 'whatsapp'
+  if (folder === 'internal') return channel === 'internal' || channel === 'knowledge'
+  return !['email', 'whatsapp', 'internal', 'knowledge'].includes(channel)
+}
+
+function sourceLabel(item: Conversation): string {
+  const channel = item.channel || 'Unknown'
+  if (channel.toLowerCase() === 'email') {
+    const kind = item.sourceMailboxKind === 'Personal' ? 'Personal' : 'Work'
+    return `Email · ${kind}`
+  }
+  return channel
+}
+
+function emailProviderLabel(provider: string | null | undefined): string {
+  switch ((provider || '').toLowerCase()) {
+    case 'microsoftgraph':
+    case 'microsoft':
+      return 'Microsoft'
+    case 'google':
+    case 'gmail':
+      return 'Gmail'
+    default:
+      return provider || 'Email'
+  }
+}
 
 const OVERVIEW_PREFS_KEY = 'palantir.overviewFocus.v4'
 
@@ -205,6 +298,94 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+function formatCustomerOverview(text: string) {
+  const lines = text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/^\s*#{1,6}\s+/, '').trimEnd())
+
+  const blocks: { type: 'heading' | 'p' | 'ul'; text?: string; items?: string[] }[] = []
+  let bullets: string[] = []
+
+  const flushBullets = () => {
+    if (bullets.length === 0) return
+    blocks.push({ type: 'ul', items: bullets })
+    bullets = []
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) {
+      flushBullets()
+      continue
+    }
+    const bullet = line.match(/^[-*•]\s+(.+)$/)
+    if (bullet) {
+      bullets.push(bullet[1])
+      continue
+    }
+    flushBullets()
+    const looksLikeHeading =
+      line.length <= 48 &&
+      !/[.!?]$/.test(line) &&
+      !line.includes(':') &&
+      /^[A-Z0-9]/.test(line)
+    blocks.push({ type: looksLikeHeading ? 'heading' : 'p', text: line })
+  }
+  flushBullets()
+
+  return blocks.map((block, index) => {
+    if (block.type === 'heading') {
+      return (
+        <p key={`h-${index}`} className="customer-overview-label">
+          {block.text}
+        </p>
+      )
+    }
+    if (block.type === 'ul') {
+      return (
+        <ul key={`ul-${index}`} className="customer-overview-list">
+          {(block.items || []).map((item, itemIndex) => (
+            <li key={`li-${index}-${itemIndex}`}>{item}</li>
+          ))}
+        </ul>
+      )
+    }
+    return (
+      <p key={`p-${index}`} style={{ margin: '0.25rem 0' }}>
+        {block.text}
+      </p>
+    )
+  })
+}
+
+function groupCustomerActivity(activity: CustomerActivity[]) {
+  const folders: { id: string; label: string; kinds: string[] }[] = [
+    { id: 'rentals', label: 'Open rentals', kinds: ['rental'] },
+    { id: 'orders', label: 'Orders', kinds: ['order'] },
+    { id: 'quotes', label: 'Quotes', kinds: ['quote'] },
+    { id: 'work', label: 'Work tickets', kinds: ['workorder'] },
+    { id: 'messages', label: 'Email & WhatsApp', kinds: ['email', 'whatsapp', 'conversation'] },
+    { id: 'tasks', label: 'Tasks', kinds: ['task'] },
+  ]
+  const used = new Set<string>()
+  const grouped = folders
+    .map((folder) => {
+      const items = activity.filter((row) => folder.kinds.includes(row.kind))
+      items.forEach((row) => used.add(`${row.kind}|${row.title}|${row.occurredAt}|${row.detail}`))
+      return { id: folder.id, label: folder.label, items }
+    })
+    .filter((folder) => folder.items.length > 0)
+
+  const other = activity.filter(
+    (row) => !used.has(`${row.kind}|${row.title}|${row.occurredAt}|${row.detail}`),
+  )
+  if (other.length > 0) {
+    grouped.push({ id: 'other', label: 'Other', items: other })
+  }
+  return grouped
+}
+
 function formatEta(seconds: number | null) {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null
   if (seconds < 5) return 'a few seconds'
@@ -238,6 +419,7 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState('alec.anthony@dnow.com')
   const [loginPassword, setLoginPassword] = useState('pilot-demo')
   const [showRegister, setShowRegister] = useState(false)
+  const [showPilotBackdoor, setShowPilotBackdoor] = useState(false)
   const [registerName, setRegisterName] = useState('')
   const [registerEmail, setRegisterEmail] = useState('')
   const [registerPassword, setRegisterPassword] = useState('')
@@ -246,10 +428,20 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [askHistoryOpen, setAskHistoryOpen] = useState(false)
   const [inboxComposeOpen, setInboxComposeOpen] = useState(false)
+  const [inboxFolder, setInboxFolder] = useState<InboxFolder>('all')
+  const [inboxReadFilter, setInboxReadFilter] = useState<InboxReadFilter>('all')
   const [health, setHealth] = useState('checking…')
   const [userLabel, setUserLabel] = useState('Loading…')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [tasks, setTasks] = useState<TaskItem[]>([])
+  const [customers, setCustomers] = useState<CustomerSummary[]>([])
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
+  const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null)
+  const [customerDetailBusy, setCustomerDetailBusy] = useState(false)
+  const [customerOverviewBusy, setCustomerOverviewBusy] = useState(false)
+  const [customerName, setCustomerName] = useState('')
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
+  const [teamsChats, setTeamsChats] = useState<TeamsChat[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [subject, setSubject] = useState('')
@@ -264,6 +456,10 @@ export default function App() {
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
   const [threadSortNewestFirst, setThreadSortNewestFirst] = useState(() => {
     const stored = localStorage.getItem('palantir.threadSort')
+    return stored !== 'oldest'
+  })
+  const [inboxSortNewestFirst, setInboxSortNewestFirst] = useState(() => {
+    const stored = localStorage.getItem('palantir.inboxSort')
     return stored !== 'oldest'
   })
   const [overviewFocus, setOverviewFocus] = useState<OverviewFocus>(() => loadOverviewFocus())
@@ -289,6 +485,11 @@ export default function App() {
   const [opsHealth, setOpsHealth] = useState<ConnectorHealth[]>([])
   const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppBridgeStatus | null>(null)
   const [whatsAppGaps, setWhatsAppGaps] = useState<WhatsAppGap[]>([])
+  const [whatsAppMessageOps, setWhatsAppMessageOps] = useState<Record<string, WhatsAppMessageOps>>(
+    {},
+  )
+  const [whatsAppOpsBusy, setWhatsAppOpsBusy] = useState(false)
+  const [threadAiSummary, setThreadAiSummary] = useState<string | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null)
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([])
@@ -340,6 +541,11 @@ export default function App() {
   const setThreadSort = (newestFirst: boolean) => {
     setThreadSortNewestFirst(newestFirst)
     localStorage.setItem('palantir.threadSort', newestFirst ? 'newest' : 'oldest')
+  }
+
+  const setInboxSort = (newestFirst: boolean) => {
+    setInboxSortNewestFirst(newestFirst)
+    localStorage.setItem('palantir.inboxSort', newestFirst ? 'newest' : 'oldest')
   }
 
   const updateOverviewFocus = (patch: Partial<OverviewFocus>) => {
@@ -574,6 +780,10 @@ export default function App() {
     setTasks(await listTasks())
   }
 
+  const refreshCustomers = async () => {
+    setCustomers(await listCustomers())
+  }
+
   const refreshAccounts = async () => {
     const items = await listConnectedAccounts()
     setAccounts(items)
@@ -776,10 +986,10 @@ export default function App() {
     }
   }
 
-  const refreshOpenWork = async () => {
+  const refreshOpenWork = async (live = false) => {
     setOpenWorkLoading(true)
     try {
-      const items = await getOpsOpenWork()
+      const items = await getOpsOpenWork(live)
       setOpenWorkItems(items)
       setOpenWorkLoadedAt(new Date().toISOString())
       setOpenWorkReady(true)
@@ -801,7 +1011,7 @@ export default function App() {
         email: me.email,
         authMode: me.authMode,
       })
-      await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts(), refreshApprovals()])
+      await Promise.all([refreshInbox(), refreshTasks(), refreshAccounts(), refreshApprovals(), refreshCustomers()])
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setSession(null)
@@ -852,20 +1062,44 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const outlook = params.get('outlook')
+    let justConnectedOutlook = false
     if (outlook === 'connected') {
-      setActive('Admin')
+      justConnectedOutlook = true
+      setActive('Inbox')
       setStatusBanner(
-        `Outlook connected${params.get('address') ? `: ${params.get('address')}` : ''}`,
+        `Email connected${params.get('address') ? `: ${params.get('address')}` : ''} — syncing into inbox…`,
       )
       window.history.replaceState({}, '', '/')
     } else if (outlook === 'error') {
       setActive('Admin')
-      const raw = params.get('message') || 'Outlook connection failed'
+      const raw = params.get('message') || 'Email connection failed'
       setError(decodeURIComponent(raw.replace(/\+/g, ' ')))
       window.history.replaceState({}, '', '/')
     }
     if (getAccessToken()) {
-      void refresh()
+      void refresh().then(async () => {
+        if (!justConnectedOutlook) return
+        try {
+          const items = await listConnectedAccounts()
+          setAccounts(items)
+          const account = items.find(
+            (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+          )
+          if (!account) return
+          const result = await syncOutlookInbox(account.id)
+          setStatusBanner(
+            `Synced email: ${result.imported} imported, ${result.skipped} already present (${result.fetched} fetched)`,
+          )
+          const inbox = await refreshInbox()
+          if (result.conversationIds[0]) {
+            setSelectedId(result.conversationIds[0])
+          } else if (inbox[0]) {
+            setSelectedId(inbox[0].id)
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Email sync failed')
+        }
+      })
     } else {
       setHealth('signed out')
       setUserLabel('Signed out')
@@ -876,14 +1110,66 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!session) return
+    const outlook = accounts.find(
+      (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
+    )
+    if (!outlook) return
+
+    const timer = window.setInterval(() => {
+      void refreshInbox().catch(() => undefined)
+    }, 30000)
+
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.userId, accounts.map((a) => `${a.id}:${a.connectionStatus}`).join('|')])
+
+  useEffect(() => {
     if (!selectedId || !session) {
       setMessages([])
+      setThreadAiSummary(null)
       return
     }
-    void loadMessages(selectedId).catch((err) =>
-      setError(err instanceof Error ? err.message : 'Could not load messages'),
-    )
+    setThreadAiSummary(null)
+    void loadMessages(selectedId)
+      .then(() => {
+        // ListMessages marks the thread read server-side — refresh list badges.
+        setConversations((prev) =>
+          prev.map((c) => (c.id === selectedId ? { ...c, isUnread: false } : c)),
+        )
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Could not load messages'))
   }, [selectedId, session])
+
+  useEffect(() => {
+    if (!selectedId || !session || selected?.channel !== 'WhatsApp') {
+      setWhatsAppMessageOps({})
+      return
+    }
+
+    let cancelled = false
+    setWhatsAppOpsBusy(true)
+    void analyzeWhatsAppConversation(selectedId)
+      .then((result: WhatsAppConversationOps) => {
+        if (cancelled) return
+        const map: Record<string, WhatsAppMessageOps> = {}
+        for (const row of result.messages) {
+          map[row.messageId] = row
+        }
+        setWhatsAppMessageOps(map)
+      })
+      .catch(() => {
+        if (!cancelled) setWhatsAppMessageOps({})
+      })
+      .finally(() => {
+        if (!cancelled) setWhatsAppOpsBusy(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, session?.userId, selected?.channel])
 
   useEffect(() => {
     if (!session) return
@@ -907,8 +1193,68 @@ export default function App() {
         setError(err instanceof Error ? err.message : 'Could not load chat history'),
       )
     }
+    if (active === 'Customers') {
+      void refreshCustomers()
+        .then(() => warmCustomers().then(() => refreshCustomers()).catch(() => undefined))
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : 'Could not load customers'),
+        )
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, session?.userId])
+
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setCustomerDetail(null)
+      setCustomerDetailBusy(false)
+      setCustomerOverviewBusy(false)
+      return
+    }
+
+    // Drop the previous company immediately so the reading pane never looks "stuck"
+    // on the last selection while the next detail request is in flight.
+    setCustomerDetail(null)
+    setCustomerDetailBusy(true)
+    setCustomerOverviewBusy(false)
+
+    const loadingId = selectedCustomerId
+    let cancelled = false
+    void getCustomer(loadingId)
+      .then(async (detail) => {
+        if (cancelled) return
+        setCustomerDetail(detail)
+        setCustomerDetailBusy(false)
+        if (!detail.companyOverview) {
+          setCustomerOverviewBusy(true)
+          try {
+            const overview = await getCustomerOverview(loadingId)
+            if (!cancelled) {
+              setCustomerDetail((prev) =>
+                prev && prev.id === loadingId
+                  ? {
+                      ...prev,
+                      companyOverview: overview.overview,
+                      overviewGeneratedAt: overview.generatedAt,
+                    }
+                  : prev,
+              )
+            }
+          } catch {
+            // Overview is best-effort; ops activity still shows.
+          } finally {
+            if (!cancelled) setCustomerOverviewBusy(false)
+          }
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setCustomerDetailBusy(false)
+        setError(err instanceof Error ? err.message : 'Could not load customer')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCustomerId])
 
   useEffect(() => {
     if (!session) return
@@ -1221,9 +1567,10 @@ export default function App() {
     setBusy(true)
     setError(null)
     try {
-      await summarizeConversation(selectedId)
-      setStatusBanner('AI summary saved as an internal note (Ollama).')
-      await Promise.all([loadMessages(selectedId), refreshInbox()])
+      const result = await summarizeConversation(selectedId)
+      setThreadAiSummary(result.summary)
+      setStatusBanner('AI summary ready (not saved to the thread).')
+      await loadMessages(selectedId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Summarize failed')
     } finally {
@@ -1307,24 +1654,125 @@ export default function App() {
     }
   }
 
-  const onConnectOutlook = async () => {
+  const onScanFollowUps = async () => {
     setBusy(true)
     setError(null)
     try {
-      const result = await beginMicrosoftAuthorize()
+      const result = await scanFollowUps()
+      await refreshTasks()
+      setStatusBanner(
+        result.tasksCreated > 0
+          ? `Follow-up scan created ${result.tasksCreated} task(s) from ${result.proposals} proposal(s).`
+          : `Follow-up scan finished — ${result.proposals} proposal(s), nothing new to create.`,
+      )
+      setActive('Tasks')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Follow-up scan failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onCreateCustomer = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!customerName.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      const created = await createCustomer(customerName.trim())
+      setCustomerName('')
+      await refreshCustomers()
+      setSelectedCustomerId(created.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create customer')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onReconcileCustomers = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await reconcileCustomers()
+      await refreshCustomers()
+      if (selectedCustomerId) {
+        setCustomerDetail(await getCustomer(selectedCustomerId))
+      }
+      setStatusBanner(result.notes.filter(Boolean).join(' '))
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Customer reconcile failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onLoadGraphExtras = async () => {
+    if (!connectedOutlook) {
+      setError('Connect a Microsoft account in Admin first.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const [events, chats] = await Promise.all([
+        listCalendarEvents(connectedOutlook.id).catch((err) => {
+          throw err
+        }),
+        listTeamsChats(connectedOutlook.id).catch((err) => {
+          throw err
+        }),
+      ])
+      setCalendarEvents(events)
+      setTeamsChats(chats)
+      setStatusBanner(
+        `Loaded ${events.length} calendar event(s) and ${chats.length} Teams chat(s).`,
+      )
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not load calendar/Teams — reconnect Microsoft account to grant new scopes.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onConnectOutlook = async (mailboxKind: 'Work' | 'Personal' = 'Work') => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await beginMicrosoftAuthorize(mailboxKind)
       window.location.href = result.authorizationUrl
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start Outlook connection')
+      setError(err instanceof Error ? err.message : 'Could not start email connection')
+      setBusy(false)
+    }
+  }
+
+  const onSetMailboxKind = async (accountId: string, mailboxKind: 'Work' | 'Personal') => {
+    setBusy(true)
+    setError(null)
+    try {
+      await updateMailboxKind(accountId, mailboxKind)
+      await refreshAccounts()
+      await refreshInbox()
+      setStatusBanner(`Mailbox marked as ${mailboxKind}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update mailbox kind')
+    } finally {
       setBusy(false)
     }
   }
 
   const onSyncOutlook = async () => {
-    const account = accounts.find(
+    const connected = accounts.filter(
       (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
     )
-    if (!account) {
-      setError('Connect Outlook in Admin before syncing.')
+    if (connected.length === 0) {
+      setError('Connect an email account in Admin before syncing.')
       setActive('Admin')
       return
     }
@@ -1332,20 +1780,32 @@ export default function App() {
     setBusy(true)
     setError(null)
     try {
-      const result = await syncOutlookInbox(account.id)
+      let imported = 0
+      let skipped = 0
+      let fetched = 0
+      let firstConversationId: string | null = null
+      for (const account of connected) {
+        const result = await syncOutlookInbox(account.id)
+        imported += result.imported
+        skipped += result.skipped
+        fetched += result.fetched
+        if (!firstConversationId && result.conversationIds[0]) {
+          firstConversationId = result.conversationIds[0]
+        }
+      }
       setStatusBanner(
-        `Synced Outlook: ${result.imported} imported, ${result.skipped} already present (${result.fetched} fetched)`,
+        `Synced email: ${imported} imported, ${skipped} already present (${fetched} fetched)`,
       )
       const inbox = await refreshInbox()
-      if (result.conversationIds[0]) {
-        setSelectedId(result.conversationIds[0])
+      if (firstConversationId) {
+        setSelectedId(firstConversationId)
       } else if (inbox[0]) {
         setSelectedId(inbox[0].id)
       }
       setActive('Inbox')
       await refreshAccounts()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Outlook sync failed')
+      setError(err instanceof Error ? err.message : 'Email sync failed')
     } finally {
       setBusy(false)
     }
@@ -1357,9 +1817,9 @@ export default function App() {
     try {
       await disconnectAccount(accountId)
       await refreshAccounts()
-      setStatusBanner('Outlook disconnected')
+      setStatusBanner('Email account disconnected')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not disconnect Outlook')
+      setError(err instanceof Error ? err.message : 'Could not disconnect email account')
     } finally {
       setBusy(false)
     }
@@ -1391,12 +1851,30 @@ export default function App() {
     }
   }
 
+  const onRefreshWhatsAppTitles = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await refreshWhatsAppTitles()
+      await refreshInbox()
+      setStatusBanner(
+        result.updated > 0
+          ? `Updated ${result.updated} WhatsApp chat title${result.updated === 1 ? '' : 's'}`
+          : 'No WhatsApp titles needed updating',
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not refresh WhatsApp titles')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onRefreshOpenWork = async () => {
     setBusy(true)
     setError(null)
     try {
-      await refreshOpenWork()
-      setStatusBanner(`Open work refreshed · ${new Date().toLocaleString()}`)
+      await refreshOpenWork(true)
+      setStatusBanner(`Open work live refresh · ${new Date().toLocaleString()}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Open work refresh failed')
     } finally {
@@ -1418,12 +1896,33 @@ export default function App() {
     setStatusBanner('Appearance updated')
   }
 
-  const connectedOutlook = accounts.find(
+  const setThemeMode = (mode: ThemeMode) => {
+    const next =
+      mode === 'professional'
+        ? { ...PROFESSIONAL_THEME }
+        : { ...theme, mode: 'themed' as const, primary: theme.primary || DEFAULT_THEME.primary, secondary: theme.secondary || DEFAULT_THEME.secondary }
+    applyThemePreset(next)
+  }
+
+  const connectedOutlookAccounts = accounts.filter(
     (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
   )
-  const canSendMail =
-    !!connectedOutlook?.grantedScopesJson &&
-    connectedOutlook.grantedScopesJson.toLowerCase().includes('mail.send')
+  const connectedOutlook = connectedOutlookAccounts[0]
+  const canSendMail = connectedOutlookAccounts.some(
+    (a) =>
+      !!a.grantedScopesJson && a.grantedScopesJson.toLowerCase().includes('mail.send'),
+  )
+  const filteredConversations = conversations
+    .filter((c) => conversationMatchesFolder(c, inboxFolder))
+    .filter((c) => {
+      if (inboxReadFilter === 'unread') return Boolean(c.isUnread)
+      if (inboxReadFilter === 'read') return !c.isUnread
+      return true
+    })
+    .sort((a, b) => {
+      const delta = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+      return inboxSortNewestFirst ? -delta : delta
+    })
   const pendingApprovals = approvals.filter((a) => a.status === 'Pending' || a.status === '0')
 
   const openWorkSources = Array.from(
@@ -1473,7 +1972,9 @@ export default function App() {
           ? 'Unified open work'
           : active === 'Inbox'
             ? 'Unified inbox'
-            : active === 'Tasks'
+            : active === 'Customers'
+              ? 'Customers'
+              : active === 'Tasks'
               ? 'Tasks & reminders'
               : active === 'Approvals'
                 ? 'Approvals'
@@ -1482,92 +1983,154 @@ export default function App() {
                   : active
 
   if (!session) {
+    const entraReady = Boolean(authProviders?.entraExternalId?.enabled)
+    const showLocalForm = showPilotBackdoor || showRegister || !entraReady
+
     return (
       <div className="login-shell">
-        <form className="login-card" onSubmit={showRegister ? onRegister : onLogin}>
+        <div className="login-card">
           <div className="brand">
             <BrandMark className="brand-mark brand-mark-lg" />
             <div>
               <strong>Palantir</strong>
-              <p>Sable pilot sign-in</p>
+              <p>Sign in with your DNOW Microsoft account</p>
             </div>
           </div>
-          {showRegister && (
-            <label>
-              Display name
-              <input
-                value={registerName}
-                onChange={(e) => setRegisterName(e.target.value)}
-                autoComplete="name"
-                required
-              />
-            </label>
+
+          {entraReady ? (
+            <>
+              <button
+                type="button"
+                className="login-primary"
+                disabled={busy}
+                onClick={() => void onEntraSignIn()}
+              >
+                {busy ? 'Opening Microsoft…' : 'Sign in with Microsoft'}
+              </button>
+              <p className="muted login-hint">
+                Use your work email (for example <code>@dnow.com</code>). This signs you into
+                Palantir — connecting email accounts stays separate under Admin.
+              </p>
+            </>
+          ) : (
+            <p className="muted login-hint">
+              Microsoft sign-in is not configured right now. Use the local pilot backdoor below,
+              or enable Entra External ID (see <code>docs/12_entra_external_id_setup.md</code>).
+            </p>
           )}
-          <label>
-            Email
-            <input
-              type="email"
-              value={showRegister ? registerEmail : loginEmail}
-              onChange={(e) =>
-                showRegister ? setRegisterEmail(e.target.value) : setLoginEmail(e.target.value)
-              }
-              autoComplete="username"
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={showRegister ? registerPassword : loginPassword}
-              onChange={(e) =>
-                showRegister
-                  ? setRegisterPassword(e.target.value)
-                  : setLoginPassword(e.target.value)
-              }
-              autoComplete={showRegister ? 'new-password' : 'current-password'}
-              required
-              minLength={showRegister ? 8 : undefined}
-            />
-          </label>
+
           {error && <p className="error">{error}</p>}
-          <button type="submit" disabled={busy}>
-            {busy
-              ? showRegister
-                ? 'Creating…'
-                : 'Signing in…'
-              : showRegister
-                ? 'Create account'
-                : 'Sign in'}
-          </button>
-          {!showRegister && authProviders?.entraExternalId?.enabled && (
-            <button type="button" className="ghost" disabled={busy} onClick={() => void onEntraSignIn()}>
-              {busy ? 'Opening Microsoft…' : 'Sign in with Microsoft'}
+
+          {entraReady && !showLocalForm && (
+            <button
+              type="button"
+              className="ghost login-backdoor-toggle"
+              disabled={busy}
+              onClick={() => {
+                setShowPilotBackdoor(true)
+                setError(null)
+              }}
+            >
+              Developer backdoor (local pilot)
             </button>
           )}
-          <button
-            type="button"
-            className="ghost"
-            disabled={busy}
-            onClick={() => {
-              setShowRegister((v) => !v)
-              setError(null)
-            }}
-          >
-            {showRegister ? 'Back to sign in' : 'Create another pilot user'}
-          </button>
-          <p className="muted login-hint">
-            Local pilot: <code>alec.anthony@dnow.com</code> / <code>pilot-demo</code>
-            <br />
-            Second user: <code>demo@palantir.local</code> / <code>pilot-demo</code>
-            {!authProviders?.entraExternalId?.enabled && (
-              <>
+
+          {showLocalForm && (
+            <form
+              className="login-backdoor"
+              onSubmit={showRegister ? onRegister : onLogin}
+            >
+              {entraReady && (
+                <div className="login-backdoor-header">
+                  <strong>Local pilot backdoor</strong>
+                  <p className="muted">
+                    Keep this for development if Microsoft login is unavailable. Not for normal
+                    users.
+                  </p>
+                </div>
+              )}
+              {showRegister && (
+                <label>
+                  Display name
+                  <input
+                    value={registerName}
+                    onChange={(e) => setRegisterName(e.target.value)}
+                    autoComplete="name"
+                    required
+                  />
+                </label>
+              )}
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={showRegister ? registerEmail : loginEmail}
+                  onChange={(e) =>
+                    showRegister ? setRegisterEmail(e.target.value) : setLoginEmail(e.target.value)
+                  }
+                  autoComplete="username"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={showRegister ? registerPassword : loginPassword}
+                  onChange={(e) =>
+                    showRegister
+                      ? setRegisterPassword(e.target.value)
+                      : setLoginPassword(e.target.value)
+                  }
+                  autoComplete={showRegister ? 'new-password' : 'current-password'}
+                  required
+                  minLength={showRegister ? 8 : undefined}
+                />
+              </label>
+              <button type="submit" disabled={busy}>
+                {busy
+                  ? showRegister
+                    ? 'Creating…'
+                    : 'Signing in…'
+                  : showRegister
+                    ? 'Create pilot account'
+                    : 'Sign in with local pilot'}
+              </button>
+              <div className="login-backdoor-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setShowRegister((v) => !v)
+                    setError(null)
+                  }}
+                >
+                  {showRegister ? 'Back to pilot sign-in' : 'Create another pilot user'}
+                </button>
+                {entraReady && (
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      setShowPilotBackdoor(false)
+                      setShowRegister(false)
+                      setError(null)
+                    }}
+                  >
+                    Hide backdoor
+                  </button>
+                )}
+              </div>
+              <p className="muted login-hint">
+                Local pilot: <code>alec.anthony@dnow.com</code> / <code>pilot-demo</code>
                 <br />
-                Microsoft / Entra sign-in appears after External ID is configured (see docs).
-              </>
-            )}
-          </p>
-        </form>
+                Second user: <code>demo@palantir.local</code> / <code>pilot-demo</code>
+              </p>
+            </form>
+          )}
+        </div>
       </div>
     )
   }
@@ -1630,8 +2193,12 @@ export default function App() {
           <span className={['pill', health.startsWith('ok') ? 'ok' : ''].filter(Boolean).join(' ')}>
             {health}
           </span>
-          <span className={['pill', connectedOutlook ? 'ok' : ''].filter(Boolean).join(' ')}>
-            {connectedOutlook ? 'Outlook connected' : 'Outlook off'}
+          <span className={['pill', connectedOutlookAccounts.length ? 'ok' : ''].filter(Boolean).join(' ')}>
+            {connectedOutlookAccounts.length
+              ? connectedOutlookAccounts.length === 1
+                ? 'Email connected'
+                : `${connectedOutlookAccounts.length} email accounts`
+              : 'Email off'}
           </span>
           <button type="button" className="sign-out" onClick={onLogout}>
             Sign out
@@ -1661,14 +2228,16 @@ export default function App() {
               className={[
                 'meta-outlook',
                 'pill',
-                connectedOutlook ? 'ok' : '',
+                connectedOutlookAccounts.length ? 'ok' : '',
               ]
                 .filter(Boolean)
                 .join(' ')}
             >
-              {connectedOutlook
-                ? `Outlook · ${connectedOutlook.primaryAddress ?? 'connected'}`
-                : 'Outlook · not connected'}
+              {connectedOutlookAccounts.length
+                ? connectedOutlookAccounts.length === 1
+                  ? `Email · ${connectedOutlook.primaryAddress ?? 'connected'}`
+                  : `Email · ${connectedOutlookAccounts.length} accounts`
+                : 'Email · not connected'}
             </span>
             <span className={['meta-health', 'pill', health.startsWith('ok') ? 'ok' : ''].filter(Boolean).join(' ')}>
               {health}
@@ -2095,11 +2664,12 @@ export default function App() {
               <div>
                 <h2 className="page-section-title">All sources</h2>
                 <p className="muted page-lede">
-                  MaintainX (both orgs), EZRentOut, and Monday — normalized into one list. Defaults to
-                  physical MaintainX work (hides On hold). Use Comment / Update to queue an
-                  approval-gated write-back.
+                  MaintainX (both orgs), EZRentOut, and Monday — normalized into one list. Loads from
+                  the shared DB ops snapshot when available (fast); Refresh forces a live pull.
+                  Defaults to physical MaintainX work (hides On hold). Use Comment / Update to queue
+                  an approval-gated write-back.
                   {openWorkLoadedAt
-                    ? ` Last refresh ${new Date(openWorkLoadedAt).toLocaleString()}.`
+                    ? ` Last load ${new Date(openWorkLoadedAt).toLocaleString()}.`
                     : ''}
                 </p>
               </div>
@@ -2304,7 +2874,62 @@ export default function App() {
           >
             <div className="inbox-list">
               <div className="inbox-toolbar">
+                <div className="inbox-folders" role="tablist" aria-label="Inbox folders">
+                  {INBOX_FOLDERS.map((folder) => {
+                    const count = conversations.filter((c) =>
+                      conversationMatchesFolder(c, folder.id),
+                    ).length
+                    return (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={inboxFolder === folder.id}
+                        className={
+                          inboxFolder === folder.id ? 'inbox-folder active' : 'inbox-folder'
+                        }
+                        onClick={() => setInboxFolder(folder.id)}
+                      >
+                        {folder.label}
+                        <span className="inbox-folder-count">{count}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="inbox-folders inbox-read-filters" role="tablist" aria-label="Read status">
+                  {INBOX_READ_FILTERS.map((filter) => {
+                    const count = conversations.filter((c) => {
+                      if (!conversationMatchesFolder(c, inboxFolder)) return false
+                      if (filter.id === 'unread') return Boolean(c.isUnread)
+                      if (filter.id === 'read') return !c.isUnread
+                      return true
+                    }).length
+                    return (
+                      <button
+                        key={filter.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={inboxReadFilter === filter.id}
+                        className={
+                          inboxReadFilter === filter.id ? 'inbox-folder active' : 'inbox-folder'
+                        }
+                        onClick={() => setInboxReadFilter(filter.id)}
+                      >
+                        {filter.label}
+                        <span className="inbox-folder-count">{count}</span>
+                      </button>
+                    )
+                  })}
+                </div>
                 <div className="inbox-toolbar-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setInboxSort(!inboxSortNewestFirst)}
+                    title="Sort conversations by last update"
+                  >
+                    {inboxSortNewestFirst ? 'Newest first' : 'Oldest first'}
+                  </button>
                   <button
                     type="button"
                     className="ghost inbox-compose-toggle"
@@ -2313,14 +2938,14 @@ export default function App() {
                   >
                     {inboxComposeOpen ? 'Cancel' : 'New conversation'}
                   </button>
-                  {connectedOutlook && (
+                  {connectedOutlookAccounts.length > 0 && (
                     <button
                       type="button"
                       className="sync-btn"
                       onClick={() => void onSyncOutlook()}
                       disabled={busy}
                     >
-                      {busy ? 'Syncing…' : 'Sync Outlook'}
+                      {busy ? 'Syncing…' : 'Sync now'}
                     </button>
                   )}
                 </div>
@@ -2346,27 +2971,47 @@ export default function App() {
               </div>
 
               <div className="list">
-                {conversations.length === 0 ? (
+                {filteredConversations.length === 0 ? (
                   <div className="empty">
-                    <h2>Inbox is empty</h2>
+                    <h2>
+                      {conversations.length === 0
+                        ? 'Inbox is empty'
+                        : inboxReadFilter === 'unread'
+                          ? 'No unread conversations'
+                          : inboxReadFilter === 'read'
+                            ? 'No read conversations'
+                            : 'Nothing in this folder'}
+                    </h2>
                     <p>
-                      {connectedOutlook
-                        ? 'Sync Outlook to pull in pilot mail, or start a local conversation.'
-                        : 'Connect Outlook in Admin, then Sync Outlook here to load pilot mail.'}
+                      {conversations.length === 0
+                        ? connectedOutlookAccounts.length > 0
+                          ? 'Mail syncs automatically from connected accounts. Use Sync now if you need the latest right away.'
+                          : 'Connect work or personal email in Admin — mail syncs into Inbox automatically.'
+                        : 'Try another folder or read filter, or sync email to pull new mail.'}
                     </p>
                   </div>
                 ) : (
-                  conversations.map((item) => (
+                  filteredConversations.map((item) => (
                     <button
                       key={item.id}
                       type="button"
-                      className={item.id === selectedId ? 'row selectable active' : 'row selectable'}
+                      className={[
+                        item.id === selectedId ? 'row selectable active' : 'row selectable',
+                        item.isUnread ? 'unread' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
                       onClick={() => setSelectedId(item.id)}
                     >
                       <div>
-                        <h3>{item.subject || 'Untitled conversation'}</h3>
+                        <h3>
+                          {item.isUnread && <span className="unread-dot" aria-hidden="true" />}
+                          {item.subject || 'Untitled conversation'}
+                        </h3>
                         <p>
-                          {item.channel} · {item.status} · {assigneeLabel(item, currentUserId)}
+                          {sourceLabel(item)} · {item.status} ·{' '}
+                          {assigneeLabel(item, currentUserId)}
+                          {item.isUnread ? ' · Unread' : ''}
                         </p>
                       </div>
                       <time dateTime={item.updatedAt}>
@@ -2401,7 +3046,9 @@ export default function App() {
                     </button>
                     <div className="thread-heading">
                       <h2>{selected.subject || 'Untitled conversation'}</h2>
-                      <p>{assigneeLabel(selected, currentUserId)}</p>
+                      <p>
+                        {sourceLabel(selected)} · {assigneeLabel(selected, currentUserId)}
+                      </p>
                     </div>
                     <div className="actions">
                       <button
@@ -2413,7 +3060,7 @@ export default function App() {
                         {threadSortNewestFirst ? 'Newest' : 'Oldest'}
                       </button>
                       <button type="button" className="ghost" onClick={() => void onSummarize()} disabled={busy}>
-                        Summarize
+                        {busy ? 'Summarizing…' : threadAiSummary ? 'Refresh summary' : 'Summarize'}
                       </button>
                       {selected.channel === 'Email' && (
                         <button
@@ -2424,7 +3071,7 @@ export default function App() {
                           title={
                             canSendMail
                               ? 'Draft with local Ollama, then approve before send'
-                              : 'Connect Outlook with Mail.Send first'
+                              : 'Connect email with send permission first'
                           }
                         >
                           AI draft
@@ -2442,6 +3089,22 @@ export default function App() {
                     </div>
                   </div>
 
+                  {threadAiSummary && (
+                    <div className="thread-ai-summary">
+                      <div className="thread-ai-summary-head">
+                        <strong>AI summary</strong>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => setThreadAiSummary(null)}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                      <p>{threadAiSummary}</p>
+                    </div>
+                  )}
+
                   <div className="timeline">
                     {sortedMessages.length === 0 ? (
                       <p className="muted">No messages yet.</p>
@@ -2457,13 +3120,123 @@ export default function App() {
                                 ? 'AI summary'
                                 : msg.isInternalNote
                                   ? 'Internal note'
-                                  : msg.direction}
+                                  : msg.fromDisplay
+                                    ? msg.fromDisplay
+                                    : selected?.channel === 'WhatsApp' && msg.direction === 'Outbound'
+                                      ? 'You'
+                                      : msg.direction}
                             </span>
                             <time dateTime={msg.createdAt}>
                               {new Date(msg.createdAt).toLocaleString()}
                             </time>
                           </header>
+                          {msg.attachments && msg.attachments.length > 0 && (
+                            <ul className="msg-attachments">
+                              {msg.attachments
+                                .filter((a) => !a.isInline)
+                                .concat(msg.attachments.filter((a) => a.isInline))
+                                .map((att) => (
+                                  <li key={att.id}>
+                                    {att.canDownload ? (
+                                      <button
+                                        type="button"
+                                        className="linkish"
+                                        disabled={busy}
+                                        onClick={() => {
+                                          void downloadMessageAttachment(
+                                            msg.conversationId,
+                                            msg.id,
+                                            att.id,
+                                            att.fileName,
+                                          ).catch((err) =>
+                                            setError(
+                                              err instanceof Error
+                                                ? err.message
+                                                : 'Attachment download failed',
+                                            ),
+                                          )
+                                        }}
+                                      >
+                                        {att.fileName}
+                                        {att.isInline ? ' (inline)' : ''}
+                                      </button>
+                                    ) : (
+                                      <span className="muted">
+                                        {att.fileName}
+                                        {att.isInline ? ' (inline)' : ''} — content unavailable
+                                      </span>
+                                    )}
+                                    <span className="muted">
+                                      {' '}
+                                      · {(att.byteSize / 1024).toFixed(att.byteSize >= 102400 ? 0 : 1)} KB
+                                    </span>
+                                  </li>
+                                ))}
+                            </ul>
+                          )}
                           <p style={{ whiteSpace: 'pre-wrap' }}>{msg.body}</p>
+                          {selected.channel === 'WhatsApp' && !msg.isInternalNote && (
+                            <div className="msg-ops-pills" aria-label="Ops cross-reference">
+                              {whatsAppOpsBusy && !whatsAppMessageOps[msg.id] ? (
+                                <span className="msg-ops-pill thinking" title="Scanning ops snapshot for matches">
+                                  <span className="msg-ops-pill-sys">Ops</span>
+                                  <span className="msg-ops-pill-status">Searching…</span>
+                                </span>
+                              ) : whatsAppMessageOps[msg.id] ? (
+                                whatsAppMessageOps[msg.id].connectors.flatMap((connector) => {
+                                  if (!connector.candidates || connector.candidates.length === 0) {
+                                    return [
+                                      <a
+                                        key={`${msg.id}-${connector.sourceSystem}-none`}
+                                        className="msg-ops-pill"
+                                        href={connector.url || '#'}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        title={`${connector.sourceSystem}: no match — open app`}
+                                        onClick={(e) => {
+                                          if (!connector.url) e.preventDefault()
+                                        }}
+                                      >
+                                        <span className="msg-ops-pill-sys">{connector.sourceSystem}</span>
+                                        <span className="msg-ops-pill-status">No match</span>
+                                      </a>,
+                                    ]
+                                  }
+
+                                  return connector.candidates.map((c) => {
+                                    const confidenceClass =
+                                      c.confidence === 'Exact'
+                                        ? 'matched'
+                                        : c.confidence === 'Likely'
+                                          ? 'likely'
+                                          : 'possible'
+                                    const short =
+                                      c.title.length > 28 ? `${c.title.slice(0, 25)}…` : c.title
+                                    return (
+                                      <a
+                                        key={`${msg.id}-${connector.sourceSystem}-${c.externalId}`}
+                                        className={['msg-ops-pill', confidenceClass].join(' ')}
+                                        href={c.url || connector.url || '#'}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        title={`${connector.sourceSystem} · ${c.confidence} · ${c.matchMethod} · ${c.title}`}
+                                        onClick={(e) => {
+                                          if (!c.url && !connector.url) e.preventDefault()
+                                        }}
+                                      >
+                                        <span className="msg-ops-pill-sys">{connector.sourceSystem}</span>
+                                        <span className="msg-ops-pill-status">
+                                          {c.confidence === 'Possible' || c.confidence === 'Likely'
+                                            ? `${c.confidence}: ${short}`
+                                            : short}
+                                        </span>
+                                      </a>
+                                    )
+                                  })
+                                })
+                              ) : null}
+                            </div>
+                          )}
                         </article>
                       ))
                     )}
@@ -2477,7 +3250,7 @@ export default function App() {
                         asNote
                           ? 'Add an internal note…'
                           : selected.channel === 'Email'
-                            ? 'Write an Outlook reply (requires approval)…'
+                            ? 'Write an email reply (requires approval)…'
                             : 'Write a reply…'
                       }
                       aria-label="Message body"
@@ -2496,7 +3269,7 @@ export default function App() {
                   </form>
                   {selected.channel === 'Email' && !canSendMail && (
                     <p className="muted" style={{ marginTop: '0.5rem' }}>
-                      Mail.Send not granted yet — reconnect Outlook in Admin after Azure has Mail.Send.
+                      Send not granted yet — reconnect the email account in Admin after send permission is enabled.
                     </p>
                   )}
                 </>
@@ -2505,8 +3278,330 @@ export default function App() {
           </section>
         )}
 
+        {active === 'Customers' && (
+          <section className="inbox customers-crm">
+            <div className="inbox-toolbar" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+              <form className="composer" onSubmit={onCreateCustomer} style={{ flex: 1, minWidth: '16rem' }}>
+                <input
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Add customer name…"
+                  aria-label="Customer name"
+                />
+                <button type="submit" disabled={busy}>
+                  Add
+                </button>
+              </form>
+              <button type="button" className="ghost" onClick={() => void onReconcileCustomers()} disabled={busy}>
+                {busy ? 'Syncing…' : 'Sync from MaintainX / Monday / EZRentOut'}
+              </button>
+            </div>
+
+            <div className="inbox-layout">
+              <div className="inbox-list">
+                {customers.length === 0 ? (
+                  <div className="empty">
+                    <h2>No customers yet</h2>
+                    <p>
+                      Add one manually, or sync from MaintainX / Monday / EZRentOut (live pull).
+                      Mail/WhatsApp junk is purged on sync.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="list">
+                    {customers.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={
+                          item.id === selectedCustomerId ? 'row selectable active' : 'row selectable'
+                        }
+                        onClick={() => {
+                          if (item.id === selectedCustomerId) return
+                          setCustomerDetail(null)
+                          setCustomerDetailBusy(true)
+                          setCustomerOverviewBusy(false)
+                          setSelectedCustomerId(item.id)
+                        }}
+                      >
+                        <div>
+                          <h3>{item.name}</h3>
+                          <p>
+                            {[
+                              item.rentalCount ? `${item.rentalCount} rentals` : null,
+                              item.quoteCount ? `${item.quoteCount} quotes` : null,
+                              item.workOrderCount ? `${item.workOrderCount} work` : null,
+                              item.orderCount ? `${item.orderCount} orders` : null,
+                              item.contactCount ? `${item.contactCount} contacts` : null,
+                              item.conversationCount ? `${item.conversationCount} threads` : null,
+                              item.openTaskCount ? `${item.openTaskCount} open tasks` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ') || 'No linked activity yet'}
+                          </p>
+                        </div>
+                        {item.lastActivityAt && (
+                          <time dateTime={item.lastActivityAt}>
+                            {new Date(item.lastActivityAt).toLocaleDateString()}
+                          </time>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="inbox-thread">
+                {!selectedCustomerId ? (
+                  <div className="empty">
+                    <h2>Customer 360</h2>
+                    <p>Select a customer to see contacts and activity across channels.</p>
+                  </div>
+                ) : customerDetailBusy ||
+                  !customerDetail ||
+                  customerDetail.id !== selectedCustomerId ? (
+                  <>
+                    <header className="thread-header">
+                      <div>
+                        <h2>
+                          {customers.find((c) => c.id === selectedCustomerId)?.name ??
+                            'Loading customer…'}
+                        </h2>
+                        <p className="muted">Loading customer details…</p>
+                      </div>
+                    </header>
+                    <div className="empty crm-customer-loading">
+                      <p>Updating the reading pane for this company.</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <header className="thread-header">
+                      <div>
+                        <h2>{customerDetail.name}</h2>
+                        <p className="muted">
+                          {[
+                            customerDetail.rentalCount
+                              ? `${customerDetail.rentalCount} rentals`
+                              : null,
+                            customerDetail.quoteCount
+                              ? `${customerDetail.quoteCount} quotes`
+                              : null,
+                            customerDetail.workOrderCount
+                              ? `${customerDetail.workOrderCount} work tickets`
+                              : null,
+                            customerDetail.orderCount
+                              ? `${customerDetail.orderCount} orders`
+                              : null,
+                            `${customerDetail.conversationCount} conversations`,
+                            `${customerDetail.openTaskCount} open tasks`,
+                            `${customerDetail.contacts.length} contacts`,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={customerOverviewBusy}
+                        onClick={() => {
+                          if (!selectedCustomerId) return
+                          const overviewForId = selectedCustomerId
+                          setCustomerOverviewBusy(true)
+                          void getCustomerOverview(overviewForId, true)
+                            .then((overview) => {
+                              setCustomerDetail((prev) =>
+                                prev && prev.id === overviewForId
+                                  ? {
+                                      ...prev,
+                                      companyOverview: overview.overview,
+                                      overviewGeneratedAt: overview.generatedAt,
+                                    }
+                                  : prev,
+                              )
+                            })
+                            .catch((err) =>
+                              setError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Could not refresh company overview',
+                              ),
+                            )
+                            .finally(() => setCustomerOverviewBusy(false))
+                        }}
+                      >
+                        {customerOverviewBusy ? 'Writing overview…' : 'Refresh overview'}
+                      </button>
+                    </header>
+
+                    <div className="panel" style={{ margin: '0.75rem 0' }}>
+                      <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Company overview</h3>
+                      {customerDetail.companyOverview ? (
+                        <div className="customer-overview">
+                          {formatCustomerOverview(customerDetail.companyOverview)}
+                          {customerDetail.overviewGeneratedAt && (
+                            <p className="muted" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                              Updated{' '}
+                              {new Date(customerDetail.overviewGeneratedAt).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="muted">
+                          {customerOverviewBusy
+                            ? 'Generating a company briefing…'
+                            : 'No overview yet — it will generate when you open this customer.'}
+                        </p>
+                      )}
+                    </div>
+
+                    {customerDetail.contacts.length > 0 && (
+                      <div className="panel" style={{ margin: '0.75rem 0' }}>
+                        <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Contacts</h3>
+                        <ul className="ops-health-list">
+                          {customerDetail.contacts.map((c) => (
+                            <li key={c.id}>
+                              <div>
+                                <strong>{c.displayName}</strong>
+                                <p className="muted">
+                                  {[c.email, c.phone].filter(Boolean).join(' · ') || 'No email/phone yet'}
+                                </p>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="crm-activity-folders">
+                      {customerDetail.activity.length === 0 ? (
+                        <div className="empty">
+                          <h2>No activity linked yet</h2>
+                          <p>Run Sync from MaintainX / Monday / EZRentOut to attach work tickets, quotes, and rentals.</p>
+                        </div>
+                      ) : (
+                        groupCustomerActivity(customerDetail.activity).map((folder) => (
+                          <details
+                            key={folder.id}
+                            className="crm-folder"
+                            open={folder.id === 'rentals' || folder.id === 'messages'}
+                          >
+                            <summary>
+                              <span>{folder.label}</span>
+                              <span className="muted">{folder.items.length}</span>
+                            </summary>
+                            <div className="crm-folder-body">
+                              {folder.items.map((row, index) => {
+                                const expandable =
+                                  row.kind === 'rental' ||
+                                  row.kind === 'order' ||
+                                  (row.detail?.includes('\n') ?? false)
+                                if (!expandable) {
+                                  return (
+                                    <article
+                                      key={`${folder.id}-${row.kind}-${row.title}-${index}`}
+                                      className="row crm-activity-row"
+                                    >
+                                      <div>
+                                        <h3>{row.title}</h3>
+                                        <p>
+                                          {row.detail}
+                                          {row.occurredAt
+                                            ? ` · ${new Date(row.occurredAt).toLocaleString()}`
+                                            : ''}
+                                        </p>
+                                        {row.conversationId && (
+                                          <button
+                                            type="button"
+                                            className="linkish"
+                                            onClick={() => {
+                                              setSelectedId(row.conversationId)
+                                              setActive('Inbox')
+                                            }}
+                                          >
+                                            Open conversation
+                                          </button>
+                                        )}
+                                        {row.url && (
+                                          <a href={row.url} target="_blank" rel="noreferrer">
+                                            Open in {row.sourceSystem || 'source'}
+                                          </a>
+                                        )}
+                                      </div>
+                                    </article>
+                                  )
+                                }
+
+                                return (
+                                  <details
+                                    key={`${folder.id}-${row.kind}-${row.title}-${index}`}
+                                    className="crm-order"
+                                  >
+                                    <summary>
+                                      <span className="crm-order-title">{row.title}</span>
+                                      <span className="muted">
+                                        {row.occurredAt
+                                          ? new Date(row.occurredAt).toLocaleDateString()
+                                          : row.kind}
+                                      </span>
+                                    </summary>
+                                    <div className="crm-order-body">
+                                      {(row.detail || '')
+                                        .split('\n')
+                                        .filter(Boolean)
+                                        .map((line, lineIndex) => (
+                                          <p
+                                            key={`${lineIndex}-${line.slice(0, 20)}`}
+                                            className={
+                                              line.trimStart().startsWith('- ')
+                                                ? 'crm-asset-line'
+                                                : undefined
+                                            }
+                                          >
+                                            {line}
+                                          </p>
+                                        ))}
+                                      {row.conversationId && (
+                                        <button
+                                          type="button"
+                                          className="linkish"
+                                          onClick={() => {
+                                            setSelectedId(row.conversationId)
+                                            setActive('Inbox')
+                                          }}
+                                        >
+                                          Open conversation
+                                        </button>
+                                      )}
+                                      {row.url && (
+                                        <a href={row.url} target="_blank" rel="noreferrer">
+                                          Open in {row.sourceSystem || 'source'}
+                                        </a>
+                                      )}
+                                    </div>
+                                  </details>
+                                )
+                              })}
+                            </div>
+                          </details>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         {active === 'Tasks' && (
           <section className="tasks">
+            <p className="muted" style={{ margin: '0 0 0.85rem' }}>
+              Palantir scans email, WhatsApp call-outs, and open work about every 10 minutes and
+              creates follow-ups when something needs attention. Junk, ads, and courtesy CCs are
+              skipped.
+            </p>
             <form className="composer" onSubmit={onCreateTask}>
               <input
                 value={taskTitle}
@@ -2517,33 +3612,59 @@ export default function App() {
               <button type="submit" disabled={busy}>
                 Add task
               </button>
+              <button type="button" className="ghost" onClick={() => void onScanFollowUps()} disabled={busy}>
+                {busy ? 'Scanning…' : 'Scan now'}
+              </button>
             </form>
 
             <div className="list">
               {tasks.length === 0 ? (
                 <div className="empty">
                   <h2>No tasks yet</h2>
-                  <p>Create a reminder or follow-up for the pilot user.</p>
+                  <p>Create a reminder, or wait for Palantir to propose follow-ups from your inbox.</p>
                 </div>
               ) : (
-                tasks.map((task) => (
-                  <article key={task.id} className="row task-row">
-                    <div>
-                      <h3 className={task.status === 'Completed' ? 'done' : undefined}>
-                        {task.title}
-                      </h3>
-                      <p>
-                        {task.status} · {task.priority}
-                        {task.dueAt ? ` · due ${new Date(task.dueAt).toLocaleString()}` : ''}
-                      </p>
-                    </div>
-                    {task.status !== 'Completed' && (
-                      <button type="button" onClick={() => void onCompleteTask(task.id)} disabled={busy}>
-                        Complete
-                      </button>
-                    )}
-                  </article>
-                ))
+                tasks.map((task) => {
+                  const isAiFollowUp = Boolean(
+                    task.description?.startsWith('[Palantir follow-up]'),
+                  )
+                  const whyLine = task.description
+                    ?.split('\n')
+                    .find((line) => line.startsWith('Why: '))
+                    ?.replace(/^Why:\s*/, '')
+                  return (
+                    <article key={task.id} className="row task-row">
+                      <div>
+                        <h3 className={task.status === 'Completed' ? 'done' : undefined}>
+                          {isAiFollowUp && <span className="pill" style={{ marginRight: '0.4rem' }}>AI</span>}
+                          {task.title}
+                        </h3>
+                        <p>
+                          {task.status} · {task.priority}
+                          {task.dueAt ? ` · due ${new Date(task.dueAt).toLocaleString()}` : ''}
+                          {whyLine ? ` · ${whyLine}` : ''}
+                        </p>
+                        {task.conversationId && (
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => {
+                              setSelectedId(task.conversationId)
+                              setActive('Inbox')
+                            }}
+                          >
+                            Open conversation
+                          </button>
+                        )}
+                      </div>
+                      {task.status !== 'Completed' && (
+                        <button type="button" onClick={() => void onCompleteTask(task.id)} disabled={busy}>
+                          Complete
+                        </button>
+                      )}
+                    </article>
+                  )
+                })
               )}
             </div>
           </section>
@@ -2553,7 +3674,7 @@ export default function App() {
           <section className="tasks">
             {!canSendMail && connectedOutlook && (
               <p className="error">
-                Reconnect Outlook in Admin to grant Mail.Send before approving outbound mail.
+                Reconnect email in Admin with send permission before approving outbound mail.
               </p>
             )}
             <div className="list">
@@ -2814,101 +3935,126 @@ export default function App() {
                 <div>
                   <h2>Appearance</h2>
                   <p>
-                    Primary and secondary colors for this browser. Updates buttons, accents, the
-                    sidebar mark, and the tab favicon.
+                    Choose a professional light UI, or a colored theme you can customize for this
+                    browser.
                   </p>
                 </div>
                 <BrandMark className="brand-mark brand-mark-lg" />
               </div>
 
-              <div className="theme-pickers">
-                <label>
-                  Primary
-                  <span className="theme-color-row">
-                    <input
-                      type="color"
-                      value={
-                        /^#[0-9a-fA-F]{6}$/.test(theme.primary)
-                          ? theme.primary
-                          : DEFAULT_THEME.primary
-                      }
-                      onChange={(e) => updateTheme({ primary: e.target.value })}
-                      aria-label="Primary color"
-                    />
-                    <input
-                      type="text"
-                      value={theme.primary}
-                      onChange={(e) => {
-                        const v = e.target.value.trim()
-                        if (/^#[0-9a-fA-F]{6}$/.test(v)) updateTheme({ primary: v })
-                        else setTheme((prev) => ({ ...prev, primary: v }))
-                      }}
-                      onBlur={() => {
-                        if (!/^#[0-9a-fA-F]{6}$/.test(theme.primary)) {
-                          updateTheme({ primary: DEFAULT_THEME.primary })
-                        }
-                      }}
-                      spellCheck={false}
-                    />
-                  </span>
-                </label>
-                <label>
-                  Secondary
-                  <span className="theme-color-row">
-                    <input
-                      type="color"
-                      value={
-                        /^#[0-9a-fA-F]{6}$/.test(theme.secondary)
-                          ? theme.secondary
-                          : DEFAULT_THEME.secondary
-                      }
-                      onChange={(e) => updateTheme({ secondary: e.target.value })}
-                      aria-label="Secondary color"
-                    />
-                    <input
-                      type="text"
-                      value={theme.secondary}
-                      onChange={(e) => {
-                        const v = e.target.value.trim()
-                        if (/^#[0-9a-fA-F]{6}$/.test(v)) updateTheme({ secondary: v })
-                        else setTheme((prev) => ({ ...prev, secondary: v }))
-                      }}
-                      onBlur={() => {
-                        if (!/^#[0-9a-fA-F]{6}$/.test(theme.secondary)) {
-                          updateTheme({ secondary: DEFAULT_THEME.secondary })
-                        }
-                      }}
-                      spellCheck={false}
-                    />
-                  </span>
-                </label>
-              </div>
-
-              <div className="theme-presets">
-                {THEME_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className="theme-preset"
-                    onClick={() => applyThemePreset(preset.colors)}
-                  >
-                    <span
-                      className="theme-swatch"
-                      style={{
-                        background: `linear-gradient(135deg, ${preset.colors.primary}, ${preset.colors.secondary})`,
-                      }}
-                    />
-                    {preset.label}
-                  </button>
-                ))}
+              <div className="theme-mode-toggle" role="group" aria-label="Appearance mode">
                 <button
                   type="button"
-                  className="ghost"
-                  onClick={() => applyThemePreset(DEFAULT_THEME)}
+                  className={theme.mode === 'professional' ? 'active' : ''}
+                  onClick={() => setThemeMode('professional')}
                 >
-                  Reset default
+                  Professional
+                </button>
+                <button
+                  type="button"
+                  className={theme.mode === 'themed' ? 'active' : ''}
+                  onClick={() => setThemeMode('themed')}
+                >
+                  Themed
                 </button>
               </div>
+
+              {theme.mode === 'professional' ? (
+                <p className="muted" style={{ marginTop: '0.85rem' }}>
+                  Clean off-white and black interface. Switch to Themed to pick accent colors.
+                </p>
+              ) : (
+                <>
+                  <div className="theme-pickers">
+                    <label>
+                      Primary
+                      <span className="theme-color-row">
+                        <input
+                          type="color"
+                          value={
+                            /^#[0-9a-fA-F]{6}$/.test(theme.primary)
+                              ? theme.primary
+                              : DEFAULT_THEME.primary
+                          }
+                          onChange={(e) => updateTheme({ primary: e.target.value })}
+                          aria-label="Primary color"
+                        />
+                        <input
+                          type="text"
+                          value={theme.primary}
+                          onChange={(e) => {
+                            const v = e.target.value.trim()
+                            if (/^#[0-9a-fA-F]{6}$/.test(v)) updateTheme({ primary: v })
+                            else setTheme((prev) => ({ ...prev, primary: v }))
+                          }}
+                          onBlur={() => {
+                            if (!/^#[0-9a-fA-F]{6}$/.test(theme.primary)) {
+                              updateTheme({ primary: DEFAULT_THEME.primary })
+                            }
+                          }}
+                          spellCheck={false}
+                        />
+                      </span>
+                    </label>
+                    <label>
+                      Secondary
+                      <span className="theme-color-row">
+                        <input
+                          type="color"
+                          value={
+                            /^#[0-9a-fA-F]{6}$/.test(theme.secondary)
+                              ? theme.secondary
+                              : DEFAULT_THEME.secondary
+                          }
+                          onChange={(e) => updateTheme({ secondary: e.target.value })}
+                          aria-label="Secondary color"
+                        />
+                        <input
+                          type="text"
+                          value={theme.secondary}
+                          onChange={(e) => {
+                            const v = e.target.value.trim()
+                            if (/^#[0-9a-fA-F]{6}$/.test(v)) updateTheme({ secondary: v })
+                            else setTheme((prev) => ({ ...prev, secondary: v }))
+                          }}
+                          onBlur={() => {
+                            if (!/^#[0-9a-fA-F]{6}$/.test(theme.secondary)) {
+                              updateTheme({ secondary: DEFAULT_THEME.secondary })
+                            }
+                          }}
+                          spellCheck={false}
+                        />
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="theme-presets">
+                    {THEME_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className="theme-preset"
+                        onClick={() => applyThemePreset(preset.colors)}
+                      >
+                        <span
+                          className="theme-swatch"
+                          style={{
+                            background: `linear-gradient(135deg, ${preset.colors.primary}, ${preset.colors.secondary})`,
+                          }}
+                        />
+                        {preset.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => applyThemePreset(DEFAULT_THEME)}
+                    >
+                      Reset themed default
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="panel" style={{ marginTop: '1rem' }}>
@@ -3021,9 +4167,14 @@ export default function App() {
                     MaintainX / Monday / EZRentOut. Setup: <code>connectors/WhatsApp/README.md</code>
                   </p>
                 </div>
-                <button type="button" className="ghost" onClick={() => void onRefreshWhatsAppGaps()} disabled={busy}>
-                  {busy ? 'Checking…' : 'Refresh gaps'}
-                </button>
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={() => void onRefreshWhatsAppTitles()} disabled={busy}>
+                    {busy ? 'Working…' : 'Refresh titles'}
+                  </button>
+                  <button type="button" className="ghost" onClick={() => void onRefreshWhatsAppGaps()} disabled={busy}>
+                    {busy ? 'Checking…' : 'Refresh gaps'}
+                  </button>
+                </div>
               </div>
               <p className="muted" style={{ marginTop: '0.75rem' }}>
                 {whatsAppStatus ? (
@@ -3146,42 +4297,106 @@ export default function App() {
             </div>
 
             <div className="panel" style={{ marginTop: '1rem' }}>
-              <h2>Connect Outlook</h2>
+              <h2>Connect email</h2>
               <p>
-                Connect a Microsoft mailbox (pilot or work). You&apos;ll pick an account at
-                Microsoft sign-in — work accounts may route through Okta.
-              </p>
-              <p className="muted" style={{ marginTop: '0.5rem' }}>
-                Known-good pilot: <code>palantir.pilot.aanthony@outlook.com</code>
-                <br />
-                Work try: sign in as <code>alec.anthony@dnow.com</code> when Microsoft asks.
+                Link work and personal mailboxes (Microsoft available now; Gmail and other providers
+                can be added the same way). Each account syncs into its own inbox folder.
               </p>
               <p className="muted" style={{ marginTop: '0.5rem' }}>
                 {canSendMail
-                  ? 'Mail.Read + Mail.Send granted — ready to sync and send.'
-                  : connectedOutlook
-                    ? 'Connected for read. After adding Mail.Send in Azure, disconnect and connect again to consent send.'
-                    : 'Not connected yet — use Connect Outlook to authorize Graph access.'}
+                  ? 'Read + send granted — inbox syncs automatically every couple of minutes.'
+                  : connectedOutlookAccounts.length > 0
+                    ? 'Connected for read. Reconnect after enabling send permission to approve outbound mail.'
+                    : 'Not connected yet — connect a work and/or personal mailbox.'}
               </p>
               <div className="actions" style={{ marginTop: '1rem' }}>
-                <button type="button" onClick={() => void onConnectOutlook()} disabled={busy}>
-                  {busy ? 'Redirecting…' : connectedOutlook ? 'Reconnect Outlook' : 'Connect Outlook'}
+                <button type="button" onClick={() => void onConnectOutlook('Work')} disabled={busy}>
+                  {busy ? 'Redirecting…' : 'Connect work email (Microsoft)'}
                 </button>
-                {accounts.some(
-                  (a) => a.connectionStatus === 'Connected' || a.connectionStatus === '1',
-                ) && (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void onConnectOutlook('Personal')}
+                  disabled={busy}
+                >
+                  Connect personal email (Microsoft)
+                </button>
+                {connectedOutlookAccounts.length > 0 && (
                   <button type="button" className="ghost" onClick={() => void onSyncOutlook()} disabled={busy}>
-                    Sync into Inbox
+                    Sync now
                   </button>
                 )}
               </div>
+              <p className="muted" style={{ marginTop: '0.75rem' }}>
+                Calendar and Teams chat use the same Microsoft connection. After enabling{' '}
+                <code>Calendars.Read</code> / <code>Chat.Read</code> on the app registration,
+                disconnect and reconnect so consent includes them.
+              </p>
+            </div>
+
+            <div className="panel" style={{ marginTop: '1rem' }}>
+              <div className="admin-panel-header">
+                <div>
+                  <h2>Calendar &amp; Teams</h2>
+                  <p>Preview events and chats from the connected Microsoft account (same Graph app).</p>
+                </div>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void onLoadGraphExtras()}
+                  disabled={busy || !connectedOutlook}
+                >
+                  {busy ? 'Loading…' : 'Load calendar & chats'}
+                </button>
+              </div>
+              {calendarEvents.length === 0 && teamsChats.length === 0 ? (
+                <p className="muted" style={{ marginTop: '1rem' }}>
+                  Nothing loaded yet. Reconnect Microsoft if you just added calendar/Teams scopes.
+                </p>
+              ) : (
+                <>
+                  <h3 style={{ margin: '1rem 0 0.5rem', fontSize: '0.95rem' }}>
+                    Upcoming calendar ({calendarEvents.length})
+                  </h3>
+                  <ul className="ops-health-list">
+                    {calendarEvents.slice(0, 12).map((ev) => (
+                      <li key={ev.id}>
+                        <div>
+                          <strong>{ev.subject || '(no subject)'}</strong>
+                          <p className="muted">
+                            {ev.start ? new Date(ev.start).toLocaleString() : '—'}
+                            {ev.location ? ` · ${ev.location}` : ''}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <h3 style={{ margin: '1.25rem 0 0.5rem', fontSize: '0.95rem' }}>
+                    Teams chats ({teamsChats.length})
+                  </h3>
+                  <ul className="ops-health-list">
+                    {teamsChats.slice(0, 12).map((chat) => (
+                      <li key={chat.id}>
+                        <div>
+                          <strong>{chat.topic || chat.chatType || 'Chat'}</strong>
+                          <p className="muted">
+                            {chat.lastPreview?.replace(/<[^>]+>/g, ' ').slice(0, 120) || 'No preview'}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
 
             <div className="list" style={{ marginTop: '1rem' }}>
               {accounts.length === 0 ? (
                 <div className="empty">
                   <h2>No connected accounts</h2>
-                  <p>Connect the pilot Outlook mailbox to read recent mail via Microsoft Graph.</p>
+                  <p>
+                    Connect work and personal email accounts. Each syncs into its own inbox folder.
+                  </p>
                 </div>
               ) : (
                 accounts.map((account) => (
@@ -3189,11 +4404,35 @@ export default function App() {
                     <div>
                       <h3>{account.primaryAddress || account.displayName || account.id}</h3>
                       <p>
-                        {account.provider} · {account.connectionStatus}
+                        {account.mailboxKind || 'Work'} · {emailProviderLabel(account.provider)} ·{' '}
+                        {account.connectionStatus}
                         {account.lastSuccessfulSyncAt
                           ? ` · synced ${new Date(account.lastSuccessfulSyncAt).toLocaleString()}`
                           : ''}
                       </p>
+                      {(account.connectionStatus === 'Connected' ||
+                        account.connectionStatus === '1') && (
+                        <div className="actions" style={{ marginTop: '0.55rem' }}>
+                          <button
+                            type="button"
+                            className={
+                              (account.mailboxKind || 'Work') === 'Work' ? undefined : 'ghost'
+                            }
+                            disabled={busy || (account.mailboxKind || 'Work') === 'Work'}
+                            onClick={() => void onSetMailboxKind(account.id, 'Work')}
+                          >
+                            Work
+                          </button>
+                          <button
+                            type="button"
+                            className={account.mailboxKind === 'Personal' ? undefined : 'ghost'}
+                            disabled={busy || account.mailboxKind === 'Personal'}
+                            onClick={() => void onSetMailboxKind(account.id, 'Personal')}
+                          >
+                            Personal
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {account.connectionStatus !== 'Revoked' && (
                       <button
@@ -3212,7 +4451,7 @@ export default function App() {
 
             {outlookMail.length > 0 && (
               <div className="list" style={{ marginTop: '1rem' }}>
-                <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Recent Outlook mail</h2>
+                <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Recent email</h2>
                 {outlookMail.map((mail) => (
                   <article key={mail.id} className="row">
                     <div>

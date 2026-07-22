@@ -249,6 +249,11 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("LastSuccessfulSyncAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("MailboxKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
                     b.Property<string>("PrimaryAddress")
                         .HasColumnType("nvarchar(max)");
 
@@ -380,11 +385,21 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("CustomerId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool>("IsUnread")
+                        .HasColumnType("bit");
+
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid?>("ProjectId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SourceConnectedAccountId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("SourceMailboxKind")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -409,6 +424,8 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.HasIndex("OrganizationId");
 
                     b.HasIndex("ProjectId");
+
+                    b.HasIndex("SourceConnectedAccountId");
 
                     b.ToTable("Conversations", (string)null);
                 });
@@ -741,6 +758,54 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.ToTable("Messages", (string)null);
                 });
 
+            modelBuilder.Entity("Palantir.Domain.Entities.MessageAttachment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BlobPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<long>("ByteSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("nvarchar(260)");
+
+                    b.Property<bool>("IsInline")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ProviderAttachmentId")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("MessageId", "ProviderAttachmentId");
+
+                    b.ToTable("MessageAttachments", (string)null);
+                });
+
             modelBuilder.Entity("Palantir.Domain.Entities.OAuthGrant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -755,8 +820,7 @@ namespace Palantir.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("nvarchar(512)");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTimeOffset?>("ExpiresAt")
                         .HasColumnType("datetimeoffset");
@@ -1204,6 +1268,11 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("ProjectId");
 
+                    b.HasOne("Palantir.Domain.Entities.ConnectedAccount", "SourceConnectedAccount")
+                        .WithMany()
+                        .HasForeignKey("SourceConnectedAccountId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.Navigation("AssignedTeam");
 
                     b.Navigation("AssignedUser");
@@ -1213,6 +1282,8 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Navigation("Organization");
 
                     b.Navigation("Project");
+
+                    b.Navigation("SourceConnectedAccount");
                 });
 
             modelBuilder.Entity("Palantir.Domain.Entities.Customer", b =>
@@ -1331,6 +1402,25 @@ namespace Palantir.Infrastructure.Persistence.Migrations
                     b.Navigation("Conversation");
 
                     b.Navigation("SenderUser");
+                });
+
+            modelBuilder.Entity("Palantir.Domain.Entities.MessageAttachment", b =>
+                {
+                    b.HasOne("Palantir.Domain.Entities.Message", "Message")
+                        .WithMany("Attachments")
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Palantir.Domain.Entities.Organization", "Organization")
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Message");
+
+                    b.Navigation("Organization");
                 });
 
             modelBuilder.Entity("Palantir.Domain.Entities.OAuthGrant", b =>
@@ -1460,6 +1550,11 @@ namespace Palantir.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Palantir.Domain.Entities.KnowledgeDocument", b =>
                 {
                     b.Navigation("Chunks");
+                });
+
+            modelBuilder.Entity("Palantir.Domain.Entities.Message", b =>
+                {
+                    b.Navigation("Attachments");
                 });
 
             modelBuilder.Entity("Palantir.Domain.Entities.Organization", b =>
