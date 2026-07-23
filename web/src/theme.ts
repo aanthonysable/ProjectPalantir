@@ -1,3 +1,5 @@
+import { UI_EFFECTS } from './uiEffects'
+
 export type ThemeMode = 'professional' | 'themed'
 
 export type ThemeColors = {
@@ -132,17 +134,100 @@ function buildFaviconSvg(theme: ThemeColors): string {
 </svg>`
 }
 
-function setFavicon(theme: ThemeColors) {
-  const href = `data:image/svg+xml,${encodeURIComponent(buildFaviconSvg(theme))}`
+let orbFaviconToken = 0
+
+function ensureThemeFaviconLink(type: string): HTMLLinkElement {
   let link = document.querySelector<HTMLLinkElement>("link[rel='icon'][data-palantir-theme='1']")
   if (!link) {
     link = document.createElement('link')
     link.rel = 'icon'
-    link.type = 'image/svg+xml'
     link.dataset.palantirTheme = '1'
     document.head.appendChild(link)
   }
-  link.href = href
+  link.type = type
+  return link
+}
+
+async function buildOrbFaviconDataUrl(theme: ThemeColors): Promise<string> {
+  const size = 64
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('Canvas unavailable')
+  }
+
+  const img = new Image()
+  img.decoding = 'async'
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('Could not load brand orb'))
+    img.src = '/brand-orb-64.png'
+  })
+
+  ctx.clearRect(0, 0, size, size)
+  ctx.drawImage(img, 0, 0, size, size)
+
+  // Preserve lighting; remaps hues toward secondary (warm) → primary (cool).
+  ctx.globalCompositeOperation = 'color'
+  const wash = ctx.createLinearGradient(0, size * 0.15, size, size * 0.85)
+  wash.addColorStop(0, theme.secondary)
+  wash.addColorStop(0.48, theme.secondary)
+  wash.addColorStop(1, theme.primary)
+  ctx.fillStyle = wash
+  ctx.fillRect(0, 0, size, size)
+
+  // Soft brand lift so primary still reads at tiny sizes.
+  ctx.globalCompositeOperation = 'soft-light'
+  const lift = ctx.createRadialGradient(
+    size * 0.42,
+    size * 0.4,
+    size * 0.08,
+    size * 0.5,
+    size * 0.5,
+    size * 0.62,
+  )
+  lift.addColorStop(0, theme.secondary)
+  lift.addColorStop(0.55, theme.primary)
+  lift.addColorStop(1, '#000000')
+  ctx.fillStyle = lift
+  ctx.globalAlpha = 0.35
+  ctx.fillRect(0, 0, size, size)
+  ctx.globalAlpha = 1
+
+  // Restore original transparency (color/soft-light can stain the clear bg).
+  ctx.globalCompositeOperation = 'destination-in'
+  ctx.drawImage(img, 0, 0, size, size)
+  ctx.globalCompositeOperation = 'source-over'
+
+  return canvas.toDataURL('image/png')
+}
+
+function setClassicFavicon(theme: ThemeColors) {
+  const link = ensureThemeFaviconLink('image/svg+xml')
+  link.href = `data:image/svg+xml,${encodeURIComponent(buildFaviconSvg(theme))}`
+}
+
+function setFavicon(theme: ThemeColors) {
+  if (!UI_EFFECTS.orbBrand) {
+    setClassicFavicon(theme)
+    return
+  }
+
+  const token = ++orbFaviconToken
+  void buildOrbFaviconDataUrl(theme)
+    .then((href) => {
+      if (token !== orbFaviconToken) return
+      const link = ensureThemeFaviconLink('image/png')
+      link.href = href
+    })
+    .catch(() => {
+      if (token !== orbFaviconToken) return
+      // Fall back to static orb, then classic mark.
+      const link = ensureThemeFaviconLink('image/png')
+      link.href = '/favicon-32.png'
+    })
 }
 
 function applyProfessionalTheme(root: HTMLElement, theme: ThemeColors) {

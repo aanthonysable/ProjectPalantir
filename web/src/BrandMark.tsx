@@ -1,10 +1,12 @@
+import { UI_EFFECTS } from './uiEffects'
+
 type BrandMarkProps = {
   title?: string
   className?: string
 }
 
-/** Themed Palantir “P” mark — uses --accent / --secondary CSS variables. */
-export function BrandMark({ title = 'Palantir', className = 'brand-mark' }: BrandMarkProps) {
+/** Classic themed Palantir “P” mark — uses --accent / --secondary CSS variables. */
+function ClassicBrandMark({ title = 'Palantir', className = 'brand-mark' }: BrandMarkProps) {
   return (
     <span className={className} aria-hidden={title ? undefined : true} title={title}>
       <svg viewBox="0 0 64 64" role="img" aria-label={title}>
@@ -27,4 +29,35 @@ export function BrandMark({ title = 'Palantir', className = 'brand-mark' }: Bran
       </svg>
     </span>
   )
+}
+
+/**
+ * Orb artwork mark with a primary→secondary color wash (luminosity preserved).
+ * Disable via UI_EFFECTS.orbBrand to restore the classic “P”.
+ */
+function OrbBrandMark({ title = 'Palantir', className = 'brand-mark' }: BrandMarkProps) {
+  return (
+    <span
+      className={[className, 'brand-mark-orb'].filter(Boolean).join(' ')}
+      aria-hidden={title ? undefined : true}
+      title={title}
+    >
+      <img
+        className="brand-mark-orb-img"
+        src="/brand-orb-512.png"
+        alt=""
+        draggable={false}
+      />
+      <span className="brand-mark-orb-wash" aria-hidden="true" />
+      <span className="brand-mark-orb-sheen" aria-hidden="true" />
+    </span>
+  )
+}
+
+/** Themed Palantir mark — orb artwork when enabled, otherwise classic “P”. */
+export function BrandMark(props: BrandMarkProps) {
+  if (UI_EFFECTS.orbBrand) {
+    return <OrbBrandMark {...props} />
+  }
+  return <ClassicBrandMark {...props} />
 }

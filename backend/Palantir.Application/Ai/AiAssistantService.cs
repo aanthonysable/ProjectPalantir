@@ -53,6 +53,7 @@ public sealed class AiAssistantService : IAiAssistantService
                     - Use the FULL message bodies in the transcript (not just previews).
                     - Be concise (3-6 short bullets or a short paragraph).
                     - Use plain "- " bullets. Do NOT use markdown headings (#, ##, ###).
+                    - Light **bold** or *italic* is fine when helpful (the UI renders it).
                     - Call out open questions, urgency, and suggested next action.
                     - Do not invent facts that are not in the transcript.
                     - Do not send or claim that anything was sent.
@@ -69,7 +70,7 @@ public sealed class AiAssistantService : IAiAssistantService
             ],
             cancellationToken)).Trim();
 
-        summary = SanitizeAiProse(summary);
+        summary = AiTextSanitizer.SanitizeProse(summary);
 
         // Summaries are ephemeral (returned to the client only). Remove any legacy
         // persisted "AI summary" notes so threads never accumulate multiples.
@@ -396,31 +397,6 @@ public sealed class AiAssistantService : IAiAssistantService
         {
             lines = lines.Take(lines.Length - 1).ToArray();
         }
-
-        return string.Join('\n', lines).Trim();
-    }
-
-    private static string SanitizeAiProse(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return text;
-        }
-
-        var lines = text.Replace("\r\n", "\n").Split('\n')
-            .Select(line =>
-            {
-                var trimmed = line.TrimEnd();
-                var heading = System.Text.RegularExpressions.Regex.Match(
-                    trimmed,
-                    @"^\s*#{1,6}\s+(?<title>.+?)\s*$");
-                if (heading.Success)
-                {
-                    return heading.Groups["title"].Value.Trim();
-                }
-
-                return trimmed;
-            });
 
         return string.Join('\n', lines).Trim();
     }

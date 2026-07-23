@@ -15,6 +15,10 @@ Sable already runs work in separate tools:
 | **MaintainX** | CMMS — work orders, assets, preventive maintenance | **Two separate environments** (distinct API keys / orgs) |
 | **EZRentOut** | Equipment rental / asset availability | One company subdomain + API token |
 | **Monday.com** | Boards, tasks, project tracking | Personal/API token (later OAuth if needed) |
+| **InControl** (planned) | Ops / control-plane integration (TBD capabilities) | Scaffold when credentials + API docs available |
+| **Geoforce** (planned) | GPS / asset tracking | Scaffold read-only locations/assets/alerts |
+| **Geotab** (planned) | Fleet telematics | Scaffold vehicles/trips/exceptions |
+| **Ignition** (evaluate) | SCADA / IIoT (Inductive Automation) | Spike first — connector vs knowledge-only |
 | **SAP** (future) | Limited accounting read | TBD — keep connector-shaped, not hardcoded |
 | **Syteline** (future alternative) | ERP if SAP is not chosen | Same abstraction as SAP accounting reads |
 

@@ -4,6 +4,8 @@
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
 }
 
 .rail {
@@ -61,6 +63,82 @@
   width: 3rem;
   height: 3rem;
   border-radius: 0.7rem;
+}
+
+.brand-mark.brand-mark-orb {
+  /* Kill the classic square plate so the orb sits cleanly in the rail header */
+  border-radius: 50%;
+  background: transparent;
+  overflow: visible;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--secondary) 28%, transparent),
+    0 0 16px color-mix(in srgb, var(--secondary) 22%, transparent);
+}
+
+.brand-mark-orb {
+  position: relative;
+}
+
+.brand-mark-orb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: inherit;
+  /* Soften residual ring stair-steps when downscaled */
+  filter: blur(0.15px) contrast(1.02);
+  transform: translateZ(0);
+}
+
+.brand-mark-orb-wash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    125deg,
+    var(--secondary) 0%,
+    color-mix(in srgb, var(--secondary) 55%, var(--accent)) 48%,
+    var(--accent) 100%
+  );
+  mix-blend-mode: color;
+  opacity: 0.88;
+  /* Match soft silhouette so the wash doesn't square-clip */
+  -webkit-mask-image: url('/brand-orb-192.png');
+  mask-image: url('/brand-orb-192.png');
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.brand-mark-orb-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 38% 34%,
+    color-mix(in srgb, var(--secondary) 35%, transparent) 0%,
+    transparent 46%
+  );
+  mix-blend-mode: soft-light;
+  opacity: 0.85;
+  -webkit-mask-image: url('/brand-orb-192.png');
+  mask-image: url('/brand-orb-192.png');
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.brand-mark-lg.brand-mark-orb,
+.brand-mark-orb.brand-mark-lg {
+  border-radius: 50%;
 }
 
 .brand strong {
@@ -277,6 +355,7 @@ button.ghost:disabled {
   overflow: hidden;
   padding: 1.5rem 2rem 0;
   position: relative;
+  background: transparent;
 }
 
 .topbar {
@@ -287,30 +366,14 @@ button.ghost:disabled {
   flex-shrink: 0;
   position: relative;
   z-index: 2;
-  padding-bottom: 0.35rem;
-  /* Soft wash so the header melts into scrolling content */
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--bg) 92%, transparent) 0%,
-    color-mix(in srgb, var(--bg) 55%, transparent) 72%,
-    transparent 100%
-  );
+  padding-bottom: 0.85rem;
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
 }
 
 .topbar::after {
-  content: '';
-  position: absolute;
-  left: -2rem;
-  right: -2rem;
-  top: 100%;
-  height: 2.25rem;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--bg) 72%, transparent) 0%,
-    color-mix(in srgb, var(--bg) 28%, transparent) 45%,
-    transparent 100%
-  );
+  display: none;
 }
 
 .stage-scroll {
@@ -318,9 +381,27 @@ button.ghost:disabled {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-top: 0.85rem;
+  padding-top: 0.35rem;
   padding-bottom: 2rem;
   overscroll-behavior: contain;
+  position: relative;
+  /*
+   * Fade lives on the body scrollport (not the header): content softens at the
+   * top edge so it melts into the transparent header / page background.
+   * Mask avoids painting a mismatched --bg band over the bokeh.
+   */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 2.75rem,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 2.75rem,
+    #000 100%
+  );
 }
 
 .eyebrow {
@@ -1446,13 +1527,71 @@ code {
   margin-top: 0;
 }
 
-.customers-crm .customer-overview-list {
+.customers-crm .customer-overview-list,
+.ai-prose-list {
   margin: 0.15rem 0 0.35rem;
-  padding-left: 1.1rem;
+  padding-left: 1.25rem;
+  list-style-type: disc;
 }
 
-.customers-crm .customer-overview-list li {
-  margin: 0.15rem 0;
+.ai-prose-list-ordered {
+  list-style-type: decimal;
+}
+
+.customers-crm .customer-overview-list li,
+.ai-prose-list li {
+  margin: 0.2rem 0;
+  padding-left: 0.15rem;
+}
+
+.customers-crm .customer-overview-label,
+.ai-prose-label {
+  margin: 0.65rem 0 0.2rem;
+  font-weight: 650;
+  font-size: 0.92rem;
+}
+
+.ai-prose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.ai-prose-p {
+  margin: 0.28rem 0;
+  white-space: pre-wrap;
+  font: inherit;
+  color: inherit;
+}
+
+.ai-prose strong {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-prose em {
+  font-style: italic;
+}
+
+.ai-prose-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  padding: 0.08rem 0.3rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--ink, #000) 8%);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+
+.ai-prose a {
+  color: var(--accent-bright, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.overview-chat-bubble .ai-prose,
+.thread-ai-summary-body .ai-prose {
+  font-size: 0.95rem;
+  line-height: 1.45;
 }
 
 .inbox-folders {
@@ -2651,6 +2790,9 @@ button.linkish:disabled {
   flex-direction: column;
   overflow: hidden;
   padding-bottom: 0;
+  /* Internal panes scroll themselves; keep the header fade off this layout. */
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .ask-shell {
@@ -3757,13 +3899,20 @@ html[data-theme-mode='professional'] .stage {
   background: var(--bg);
 }
 
-html[data-theme-mode='professional'] .topbar,
 html[data-theme-mode='professional'] .login-card,
 html[data-theme-mode='professional'] .panel,
 html[data-theme-mode='professional'] .thread,
 html[data-theme-mode='professional'] .ask-layout,
 html[data-theme-mode='professional'] .overview-card {
   background: var(--bg-panel);
+}
+
+html[data-theme-mode='professional'] .topbar {
+  background: transparent;
+}
+
+html[data-theme-mode='professional'] .topbar::after {
+  display: none;
 }
 
 html[data-theme-mode='professional'] .bubble {

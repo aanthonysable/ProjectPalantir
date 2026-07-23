@@ -77,6 +77,9 @@ public sealed class MaintainXConnector : IMaintainXConnector
                 return string.IsNullOrWhiteSpace(status) || OpenStatuses.Contains(status);
             })
             .Select(wo => MapWorkOrder(environment, wo, users, kind: "open"))
+            .Where(item => !IsMaintainXPlaceholderName(item.Title) &&
+                           !IsMaintainXPlaceholderName(item.Metadata?.GetValueOrDefault("location")) &&
+                           !IsMaintainXPlaceholderName(item.Metadata?.GetValueOrDefault("customer")))
             .ToList();
     }
 
@@ -100,6 +103,9 @@ public sealed class MaintainXConnector : IMaintainXConnector
                 return updated is not null && updated >= sinceUtc;
             })
             .Select(wo => MapWorkOrder(environment, wo, users, kind: "completed"))
+            .Where(item => !IsMaintainXPlaceholderName(item.Title) &&
+                           !IsMaintainXPlaceholderName(item.Metadata?.GetValueOrDefault("location")) &&
+                           !IsMaintainXPlaceholderName(item.Metadata?.GetValueOrDefault("customer")))
             .OrderByDescending(i =>
                 DateTimeOffset.TryParse(i.Metadata?.GetValueOrDefault("updatedAt"), out var at)
                     ? at
@@ -217,6 +223,10 @@ public sealed class MaintainXConnector : IMaintainXConnector
         }
 
         var locationName = ReadMaintainXLocationName(wo);
+        if (IsMaintainXPlaceholderName(locationName))
+        {
+            locationName = null;
+        }
 
         return new ExternalWorkItemDto(
             "MaintainX",
@@ -244,6 +254,13 @@ public sealed class MaintainXConnector : IMaintainXConnector
                 ["customer"] = locationName ?? ""
             });
     }
+
+    /// <summary>
+    /// MaintainX placeholder assets (e.g. "00-Parent Asset 1") used as hierarchy stubs — ignore everywhere.
+    /// </summary>
+    private static bool IsMaintainXPlaceholderName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        name.Trim().StartsWith("00-Parent Asset", StringComparison.OrdinalIgnoreCase);
 
     private static string? ReadMaintainXLocationName(JsonElement wo)
     {
@@ -592,6 +609,11 @@ public sealed class MaintainXConnector : IMaintainXConnector
 
         var id = part.TryGetProperty("id", out var idEl) ? idEl.ToString() : Guid.NewGuid().ToString("N");
         var name = ReadString(part, "name") ?? "(unnamed part)";
+        if (IsMaintainXPlaceholderName(name))
+        {
+            return null;
+        }
+
         var area = ReadString(part, "area");
         var types = "";
         if (part.TryGetProperty("partTypes", out var pt) && pt.ValueKind == JsonValueKind.Array)

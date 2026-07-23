@@ -1,5 +1,8 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { MenuSelect } from './MenuSelect'
+import { BokehField } from './BokehField'
+import { UI_EFFECTS } from './uiEffects'
+import { formatAiProse, prepareAiProse } from './aiProse'
 import {
   ApiError,
   ApprovalItem,
@@ -196,7 +199,7 @@ function parseKnowledgeSourcesFromContent(content: string): {
 } {
   const match = KNOWLEDGE_SOURCES_RE.exec(content)
   if (!match) {
-    return { display: content, sources: [] }
+    return { display: prepareAiProse(content), sources: [] }
   }
 
   const sources: KnowledgeSource[] = []
@@ -214,7 +217,7 @@ function parseKnowledgeSourcesFromContent(content: string): {
     })
   }
 
-  const display = content.replace(KNOWLEDGE_SOURCES_RE, '').trimEnd()
+  const display = prepareAiProse(content.replace(KNOWLEDGE_SOURCES_RE, '').trimEnd())
   return { display, sources }
 }
 
@@ -299,64 +302,7 @@ function formatBytes(bytes: number) {
 }
 
 function formatCustomerOverview(text: string) {
-  const lines = text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/^\s*#{1,6}\s+/, '').trimEnd())
-
-  const blocks: { type: 'heading' | 'p' | 'ul'; text?: string; items?: string[] }[] = []
-  let bullets: string[] = []
-
-  const flushBullets = () => {
-    if (bullets.length === 0) return
-    blocks.push({ type: 'ul', items: bullets })
-    bullets = []
-  }
-
-  for (const raw of lines) {
-    const line = raw.trim()
-    if (!line) {
-      flushBullets()
-      continue
-    }
-    const bullet = line.match(/^[-*•]\s+(.+)$/)
-    if (bullet) {
-      bullets.push(bullet[1])
-      continue
-    }
-    flushBullets()
-    const looksLikeHeading =
-      line.length <= 48 &&
-      !/[.!?]$/.test(line) &&
-      !line.includes(':') &&
-      /^[A-Z0-9]/.test(line)
-    blocks.push({ type: looksLikeHeading ? 'heading' : 'p', text: line })
-  }
-  flushBullets()
-
-  return blocks.map((block, index) => {
-    if (block.type === 'heading') {
-      return (
-        <p key={`h-${index}`} className="customer-overview-label">
-          {block.text}
-        </p>
-      )
-    }
-    if (block.type === 'ul') {
-      return (
-        <ul key={`ul-${index}`} className="customer-overview-list">
-          {(block.items || []).map((item, itemIndex) => (
-            <li key={`li-${index}-${itemIndex}`}>{item}</li>
-          ))}
-        </ul>
-      )
-    }
-    return (
-      <p key={`p-${index}`} style={{ margin: '0.25rem 0' }}>
-        {block.text}
-      </p>
-    )
-  })
+  return formatAiProse(text, { headings: true })
 }
 
 function groupCustomerActivity(activity: CustomerActivity[]) {
@@ -1988,6 +1934,7 @@ export default function App() {
 
     return (
       <div className="login-shell">
+        <BokehField variant="login" />
         <div className="login-card">
           <div className="brand">
             <BrandMark className="brand-mark brand-mark-lg" />
@@ -2137,6 +2084,7 @@ export default function App() {
 
   return (
     <div className={['shell', navOpen ? 'nav-open' : ''].filter(Boolean).join(' ')}>
+      <BokehField variant="app" />
       <button
         type="button"
         className="nav-backdrop"
@@ -2280,6 +2228,12 @@ export default function App() {
         )}
 
         <div className="stage-scroll">
+        <div
+          key={active}
+          className={['stage-page', UI_EFFECTS.pageFade ? 'stage-page-fade' : '']
+            .filter(Boolean)
+            .join(' ')}
+        >
         {active === 'Ask' && (
           <section
             className={['ask-shell', askHistoryOpen ? 'ask-history-open' : '']
@@ -2499,7 +2453,11 @@ export default function App() {
                       className={`overview-chat-bubble ${turn.role === 'user' ? 'is-user' : 'is-assistant'}`}
                     >
                       <span className="overview-chat-role">{turn.role === 'user' ? 'You' : 'Palantir'}</span>
-                      <pre>{parsed.display}</pre>
+                      {turn.role === 'assistant' ? (
+                        formatAiProse(parsed.display, { headings: false })
+                      ) : (
+                        <pre>{parsed.display}</pre>
+                      )}
                       {turn.role === 'assistant' && sources.length > 0 && (
                         <div className="ask-knowledge-sources">
                           <span className="muted ask-knowledge-sources-label">Source documents</span>
@@ -3101,7 +3059,9 @@ export default function App() {
                           Dismiss
                         </button>
                       </div>
-                      <p>{threadAiSummary}</p>
+                      <div className="thread-ai-summary-body">
+                        {formatAiProse(threadAiSummary, { headings: false })}
+                      </div>
                     </div>
                   )}
 
@@ -4481,6 +4441,7 @@ export default function App() {
             </p>
           </section>
         )}
+        </div>
         </div>
       </main>
 

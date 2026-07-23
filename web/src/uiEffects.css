@@ -1,0 +1,159 @@
+/* Optional polish — gated by UI_EFFECTS in uiEffects.ts */
+
+.bokeh-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bokeh-orb {
+  position: absolute;
+  border-radius: 50%;
+  translate: -50% -50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--secondary) 70%, white) 0%,
+    color-mix(in srgb, var(--secondary) 85%, transparent) 55%,
+    transparent 78%
+  );
+  box-shadow: 0 0 6px color-mix(in srgb, var(--secondary) 45%, transparent);
+  filter: blur(0.35px);
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
+  opacity: var(--bokeh-opacity, 0.4);
+  animation-name: bokeh-float, bokeh-twinkle;
+  animation-timing-function: ease-in-out, ease-in-out;
+  animation-iteration-count: infinite, infinite;
+  animation-direction: alternate, alternate;
+}
+
+.bokeh-orb-soft {
+  filter: blur(1.25px);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--secondary) 35%, transparent);
+  background: radial-gradient(
+    circle at 40% 35%,
+    color-mix(in srgb, var(--secondary) 75%, white) 0%,
+    color-mix(in srgb, var(--secondary) 40%, transparent) 50%,
+    transparent 74%
+  );
+}
+
+.bokeh-field-app .bokeh-orb {
+  mix-blend-mode: soft-light;
+}
+
+html[data-theme-mode='professional'] .bokeh-orb {
+  mix-blend-mode: multiply;
+  filter: blur(0.8px);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--secondary) 30%, transparent);
+}
+
+@keyframes bokeh-float {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(calc(var(--bokeh-dx, 12px) * 0.45), calc(var(--bokeh-dy, -24px) * 0.55))
+      scale(1.05);
+  }
+  100% {
+    transform: translate(var(--bokeh-dx, 12px), var(--bokeh-dy, -24px)) scale(0.92);
+  }
+}
+
+@keyframes bokeh-twinkle {
+  0% {
+    opacity: calc(var(--bokeh-opacity, 0.4) * 0.35);
+  }
+  40% {
+    opacity: var(--bokeh-opacity, 0.4);
+  }
+  100% {
+    opacity: calc(var(--bokeh-opacity, 0.4) * 0.55);
+  }
+}
+
+.login-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.login-shell > .bokeh-field {
+  z-index: 0;
+}
+
+.login-shell > .login-card {
+  position: relative;
+  z-index: 1;
+}
+
+.shell > .bokeh-field {
+  z-index: 0;
+}
+
+.shell > .stage {
+  position: relative;
+  z-index: 1;
+}
+
+.stage-page {
+  min-height: 100%;
+  height: 100%;
+}
+
+/* Ask / full-height panes need a flex height chain through the page wrapper. */
+.stage-scroll:has(.ask-shell) > .stage-page,
+.stage-scroll:has(.inbox-layout) > .stage-page,
+.stage-scroll:has(.customers-crm) > .stage-page {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage-scroll:has(.ask-shell) > .stage-page > .ask-shell,
+.stage-scroll:has(.inbox-layout) > .stage-page > .inbox-layout,
+.stage-scroll:has(.customers-crm) > .stage-page > .customers-crm {
+  flex: 1;
+  min-height: 0;
+}
+
+.stage-page-fade {
+  animation:
+    stage-page-move 640ms cubic-bezier(0.22, 1, 0.36, 1) both,
+    /* No fill-mode: leaving filter:blur(0) on the wrapper breaks nested overflow scroll. */
+    stage-page-blur 390ms linear;
+}
+
+@keyframes stage-page-move {
+  from {
+    opacity: 0;
+    transform: translateY(36px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes stage-page-blur {
+  from {
+    filter: blur(4px);
+  }
+  to {
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bokeh-orb {
+    animation: none !important;
+  }
+
+  .stage-page-fade {
+    animation: none !important;
+  }
+}

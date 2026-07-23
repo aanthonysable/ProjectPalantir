@@ -592,6 +592,7 @@ public sealed class OverviewService : IOverviewService
                     Formatting:
                     - Prefer short paragraphs and "- " bullets under each label.
                     - Do not use #, ##, ###, or markdown horizontal rules.
+                    - Light **bold** or *italic* is fine when it helps; the UI renders it.
 
                     Fact rules:
                     - Use ONLY the FACT SHEET and KNOWLEDGE EXCERPTS. Do not invent people, tickets, quotes, comments, or quantities.
@@ -615,12 +616,8 @@ public sealed class OverviewService : IOverviewService
             ],
             cancellationToken)).Trim();
 
-        // Soft-strip any leftover markdown heading markers from the model.
-        narrative = System.Text.RegularExpressions.Regex.Replace(
-            narrative,
-            @"^\s*#{1,6}\s+",
-            string.Empty,
-            System.Text.RegularExpressions.RegexOptions.Multiline);
+        // Soft-strip leftover markdown headings / emphasis asterisks from the model.
+        narrative = AiTextSanitizer.SanitizeProse(narrative);
 
 
         await _audit.WriteAsync(
@@ -765,6 +762,7 @@ public sealed class OverviewService : IOverviewService
                 Answer ONLY from those blocks. Prefer live FACT SHEET over prior Ask history when they conflict. Copy names, WO#, and asset ids exactly as written.
                 Rules:
                 - Default style: a short human answer (1–3 sentences, or a few tight bullets). Lead with the number / name they asked for.
+                - Plain text with light formatting: use "- " for bullets. Light **bold** / *italic* is fine (the UI renders it). Do NOT use markdown # headings or code fences.
                 - Do NOT dump line items, full WO lists, asset lists, quote tables, or long rollups unless the user asks for details / breakdown / list / line items / "show me" / "which ones".
                 - If they only asked for a total or "who has the most", give that answer and stop. Offer that you can break it down if useful is optional and brief — do not attach the breakdown unprompted.
                 - Prefer "## Matches for this question" when you need a fact, but still summarize — don't paste the whole section.
@@ -827,6 +825,8 @@ public sealed class OverviewService : IOverviewService
         {
             reply = "No answer returned — try rephrasing with a WO#, person name, part, or quote title.";
         }
+
+        reply = AiTextSanitizer.SanitizeProse(reply);
 
         if (wantsPromoteAttachments)
         {

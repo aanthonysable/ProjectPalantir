@@ -867,6 +867,7 @@ public sealed class CustomerService : ICustomerService
 
                         Formatting (required):
                         - Do NOT use markdown headings (#, ##, ###) or horizontal rules.
+                        - Light **bold** or *italic* is fine when helpful (the UI renders it).
                         - Use short section labels on their own line, then bullet points under each.
                         - Prefer "- " bullets. Keep paragraphs short. No code fences.
 
@@ -902,7 +903,7 @@ public sealed class CustomerService : ICustomerService
                         """)
                 ],
                 cancellationToken)).Trim();
-            overview = SanitizeAiProse(overview);
+            overview = AiTextSanitizer.SanitizeProse(overview);
         }
         catch (Exception ex)
         {
@@ -2625,30 +2626,6 @@ public sealed class CustomerService : ICustomerService
         return sb.ToString().Trim();
     }
 
-    private static string SanitizeAiProse(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return text;
-        }
-
-        var lines = text.Replace("\r\n", "\n").Split('\n')
-            .Select(line =>
-            {
-                var trimmed = line.TrimEnd();
-                // Convert "# Heading" / "## Heading" into a plain label line.
-                var heading = Regex.Match(trimmed, @"^\s*#{1,6}\s+(?<title>.+?)\s*$");
-                if (heading.Success)
-                {
-                    return heading.Groups["title"].Value.Trim();
-                }
-
-                return trimmed;
-            });
-
-        return string.Join('\n', lines).Trim();
-    }
-
     /// <summary>
     /// Legacy CRM sync stored one activity row per checked-out EZ asset.
     /// Those titles look like "16X-0003 — …" and should not count as rental jobs.
@@ -2878,6 +2855,12 @@ public sealed class CustomerService : ICustomerService
             "corp", "corp.", "co", "co.", "company"
         ];
         if (blocked.Any(b => trimmed.Equals(b, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        // MaintainX hierarchy stubs — not real customers/sites.
+        if (trimmed.StartsWith("00-Parent Asset", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
